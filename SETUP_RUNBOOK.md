@@ -52,22 +52,20 @@ python -c "import zipfile; zipfile.ZipFile('cub2002011.zip').extractall('CUB_200
 
 > **Note:** Git Bash's built-in `unzip` is too old to handle this file (it's Zip64 format) and will fail with "End-of-central-directory signature not found." Use the Python one-liner above instead, or Windows' own File Explorer → right-click → Extract All.
 
-4. **This specific Kaggle upload double-nests the folder** and includes extra files you don't need. Flatten it:
-```bash
-cd ~/cape-reproduction/data
-mv CUB_200_2011 CUB_200_2011_tmp
-mv CUB_200_2011_tmp/CUB_200_2011 ./CUB_200_2011
-rm -rf CUB_200_2011_tmp
-ls CUB_200_2011
-```
-You should now see `images/`, `images.txt`, `image_class_labels.txt`, `train_test_split.txt`, `classes.txt` directly inside `CUB_200_2011/`.
+4. This Kaggle upload nests the real dataset one level deeper than expected,
+   at CUB_200_2011/CUB_200_2011/, alongside two unused folders (cvpr2016_cub/
+   and segmentations/ — irrelevant to CAPE, safe to ignore). No need to
+   physically flatten it — just point commands at the nested path.
 
-5. **Repack it into a `.tgz`** — the official CAPE repo's dataset loader (`datasets.py`) expects a `CUB_200_2011.tgz` file sitting in the data root, not a plain extracted folder:
-```bash
-cd ~/cape-reproduction/data
-tar -czf CUB_200_2011.tgz CUB_200_2011/images.txt CUB_200_2011/train_test_split.txt CUB_200_2011/images
-```
-This builds the tgz from files already on your disk — no re-download needed.
+5. Repack it into a .tgz from the nested path (run from inside data/) — the
+   official CAPE repo's dataset loader expects a CUB_200_2011.tgz file
+   sitting in the data root:
+   cd ~/cape-reproduction/data
+   tar -czf CUB_200_2011.tgz -C CUB_200_2011/CUB_200_2011 images.txt train_test_split.txt images
+
+6. Verify it worked:
+   tar -tzf CUB_200_2011.tgz | head -5
+   Should show paths starting with CUB_200_2011/, e.g. CUB_200_2011/images.txt
 
 Full details are also in `data/README.md` inside the repo.
 
