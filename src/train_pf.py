@@ -32,8 +32,26 @@ from torch.utils.data import DataLoader, Subset
 from torch.utils.tensorboard import SummaryWriter
 from tqdm import tqdm
 
-# Path to the cloned AIML-MED/CAPE reference repo (adjust if yours differs)
-CAPE_REPO_PATH = os.path.expanduser('~/cape-reference')
+# Path to the cloned AIML-MED/CAPE reference repo. Checked in order:
+# 1. CAPE_REPO_PATH environment variable, if set
+# 2. common local/Kaggle/Colab locations
+_CANDIDATES = [
+    os.environ.get('CAPE_REPO_PATH'),
+    os.path.expanduser('~/cape-reference'),
+    '/kaggle/working/cape-reference',
+    '/content/cape-reference',
+    './cape-reference',
+    '../cape-reference',
+]
+CAPE_REPO_PATH = next((p for p in _CANDIDATES if p and os.path.isdir(p)), None)
+if CAPE_REPO_PATH is None:
+    raise FileNotFoundError(
+        "Could not find the cloned AIML-MED/CAPE reference repo in any of the usual "
+        "locations. Either clone it to one of: " + ", ".join(c for c in _CANDIDATES if c) +
+        " — or set the CAPE_REPO_PATH environment variable to its location, e.g.:\n"
+        "  import os; os.environ['CAPE_REPO_PATH'] = '/kaggle/working/cape-reference'"
+    )
+print(f'Using CAPE reference repo at: {CAPE_REPO_PATH}')
 sys.path.insert(0, CAPE_REPO_PATH)
 
 from models.model import Net
