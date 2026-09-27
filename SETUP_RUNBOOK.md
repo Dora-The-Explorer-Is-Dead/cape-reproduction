@@ -1,8 +1,14 @@
 # Setup Runbook — CAPE Reproduction
 
+This is the lean path — what to actually do, and why each step exists. Earlier attempts hit dead ends (broken Caltech download links, a Windows unzip tool too old for this dataset, a bad `tar` command); none of that is reproduced here, only what actually works.
+
 **Two environments are used together, on purpose:**
 - **Local machine** — where the git repo lives, where you write/edit code, where you push to GitHub. This is your source of truth.
 - **Kaggle Notebooks** — where the dataset lives and where training actually runs, because it has a free GPU and the dataset mounts pre-extracted with no download step. Code is pulled from GitHub into Kaggle, run there, and results (checkpoints, logs) are brought back manually.
+
+---
+
+**Contents:** [1](#1-clone-the-repo-local) Clone repo · [2](#2-set-up-the-python-environment-local) Local env · [3](#3-clone-the-official-cape-reference-repo-local) Reference repo · [4](#4-understand-tgz-briefly) `.tgz` explained · [5](#5-get-the-dataset--via-kaggle-recommended-path) Dataset (Kaggle) · [6](#6-turn-on-the-gpu-kaggle) GPU · [7](#7-clone-both-repos-into-the-kaggle-session) Kaggle clone · [8](#8-extract-the-dataset-into-pickles-kaggle) Extraction · [9](#9-understand-pf-briefly) PF explained · [10](#10-run-the-sanity-check-first--always-before-any-real-training) Sanity check · [11](#11-run-the-small-subset-training-on-kaggle--before-the-full-run) Subset run · [12](#12-run-the-full-reproduction-kaggle) Full training · [13](#13-bring-results-back) Results → Hugging Face · [14](#14-log-everything-as-you-go) Provenance · [15](#15-generate-heatmaps-and-metrics-kaggle) Heatmaps & metrics · [16](#16-recovering-from-checkpoints--what-to-run-after-any-interruption) Checkpoint recovery
 
 ---
 
@@ -54,11 +60,9 @@ You'll see this word a lot. A `.tgz` (`.tar.gz`) is a folder of files bundled in
 1. Go to `kaggle.com` → **Code** → **New Notebook**
 2. Right sidebar → **+ Add Input** → search "CUB 200 2011" → add a dataset that includes `images.txt`, `train_test_split.txt`, and an `images/` folder (preview it before adding to check)
 3. It mounts pre-extracted at `/kaggle/input/<dataset-name>/` — no download or unzip needed at all
-4. This is the exact link we're using: [CUB_200_2011](https://www.kaggle.com/datasets/wenewone/cub2002011)
+4. **Check the exact path**, since some uploads nest an extra folder:
 ```python
-!ls /kaggle/input # this will tell you what folder is inside it which you will replace <dataset-name> with in the line below.
-!ls /kaggle/input/<dataset-name> # keep going down the directories till you reach CUB_200_2011 which will have another CUB_200_2011 in it as the line below demonstrates
-# execute this third line once your directory looks like this:
+!ls /kaggle/input/<dataset-name>
 !ls /kaggle/input/<dataset-name>/CUB_200_2011/CUB_200_2011   # if double-nested
 ```
 You're looking for `images.txt`, `images/`, `train_test_split.txt`, `classes.txt` — note however many folders deep they actually are, you'll pass that exact path as `--data_root` in step 6.
@@ -133,73 +137,147 @@ Matches the authors' config: `lr=1e-3`, `T_kld=2`, SGD, 30 epochs. Checkpoints e
 %tensorboard --logdir /kaggle/working/results/logs/full_pf
 ```
 
-## 13. Get results off Kaggle immediately after training finishes
+## 13. Bring results back
 
-Kaggle's Output tab is unreliable for larger files — it can show stale or
-incomplete listings even when the files are genuinely fine on disk. Don't
-trust it. Always verify directly against the live session first:
-
-```python
-import os
-path = '/kaggle/working/results/checkpoints/full_pf/best.pth'
-print(os.path.exists(path), os.path.getsize(path) if os.path.exists(path) else "N/A")
-```
-
-Kaggle's `FileLink` download and the Output tab's download button both
-regularly fail (404s) for files this size (~97MB). Don't fight them — upload
-straight from Kaggle to Hugging Face instead, server to server, bypassing
-your own browser/connection entirely:
+Don't rely on Kaggle's own download UI — its `FileLink` helper and the
+Output tab's download button both regularly fail (404s, stale listings) on
+files this size, and `/kaggle/working` itself doesn't survive indefinitely
+between sessions. Instead, push straight from Kaggle to Hugging Face, server
+to server:
 
 ```python
 !pip install huggingface_hub
 from huggingface_hub import login, HfApi, create_repo
 
-login(token="your-hf-write-token")   # get one at huggingface.co → Settings → Access Tokens
-create_repo("your-username/cape-cub-pf", exist_ok=True)
+login(token="<your-hf-write-token>")   # huggingface.co → Settings → Access Tokens → New token (Write)
+create_repo("<your-username>/cape-cub-pf", exist_ok=True)
 
 api = HfApi()
-api.upload_file(
-    path_or_fileobj="/kaggle/working/results/checkpoints/full_pf/best.pth",
-    path_in_repo="best.pth",
-    repo_id="your-username/cape-cub-pf",
-)
-api.upload_folder(
-    folder_path="/kaggle/working/results/logs/full_pf",
-    path_in_repo="logs/full_pf",
-    repo_id="your-username/cape-cub-pf",
-)
+api.upload_file(path_or_fileobj="/kaggle/working/results/checkpoints/full_pf/best.pth", path_in_repo="best.pth", repo_id="<your-username>/cape-cub-pf")
+api.upload_folder(folder_path="/kaggle/working/results/logs/full_pf", path_in_repo="logs/full_pf", repo_id="<your-username>/cape-cub-pf")
 ```
 
-`best.pth` is the checkpoint that matters — whichever epoch scored highest on
-test accuracy, used for all downstream heatmap generation and metrics.
-`latest.pth` (the final epoch) is optional, kept only as a just-in-case
-backup. Once uploaded, add the Hugging Face repo link to `README.md` and
-commit that change, same as any other file:
+Reference the resulting `https://huggingface.co/<your-username>/cape-cub-pf`
+link from your README rather than committing the checkpoint to git (it's
+90MB+, same reasoning as the authors' own checkpoints). Do this immediately
+after training finishes, in the same live session — don't close the tab
+first and try to recover the files afterward (see Section 16 for what
+happens if you do).
 
-```bash
-cd ~/cape-reproduction
-git pull
-git add README.md
-git commit -m "Add checkpoint link"
-git push
-```
+## 14. Log everything as you go
 
-Do this immediately after training finishes, in the same session — don't
-close the Kaggle tab first and try to recover the files later.
-
-## 14. Bring results back
-
-Download `best.pth` and the TensorBoard logs from `/kaggle/working/results/` via Kaggle's file browser (or **Save Version** to persist the session's outputs), since `/kaggle/working` doesn't survive indefinitely. Reference the checkpoint from your README rather than committing it to git (it's 90MB+, same reasoning as the authors' own checkpoints).
-
-## 15. Log everything as you go
-
-Every new or adapted file gets a row in `PROVENANCE.md` the same day it's written — not reconstructed later:
-
-| File | Status | Source |
-|---|---|---|
-| `resumable_extract.py` | Adapted | AIML-MED/CAPE `datasets.py::_extract()` — checkpointed, reads folder or tgz |
-| `src/train_pf.py` | Adapted | AIML-MED/CAPE `main.py` + `trainer.py` — subset sampling, per-epoch checkpointing, resume, cross-platform reference-repo path detection |
-| `experiments/01_sanity_check.ipynb` | Written by us | — |
+Every new or adapted file gets a row in `PROVENANCE.md`
 
 ---
+
+## 15. Generate heatmaps and metrics (Kaggle)
+
+```python
+!pip install huggingface_hub
+from huggingface_hub import hf_hub_download
+best_pth_path = hf_hub_download(repo_id="<your-username>/cape-cub-pf", filename="best.pth")
+
+!python src/explain.py \
+    --checkpoint {best_pth_path} \
+    --processed_dir /kaggle/working/data/processed \
+    --output_dir /kaggle/working/results/figures \
+    --num_images 5
+
+!python src/metrics.py \
+    --checkpoint {best_pth_path} \
+    --processed_dir /kaggle/working/data/processed \
+    --output_dir /kaggle/working/results/tables \
+    --num_images 5794 \
+    --checkpoint_every 100
+```
+
+`explain.py` produces qualitative comparison figures (CAM, Grad-CAM,
+Grad-CAM++, CAPE, mu-CAPE side by side) for a handful of test images.
+`metrics.py` computes AD, IC, ADD, ADCC, mIoU, and BC across the full test
+set — this is slow (roughly 20+ forward/backward passes per image across
+five methods), so it checkpoints every 100 images by default. If it's
+interrupted, rerun the identical command and it resumes automatically (see
+Section 16 below).
+
+**Push results straight to Hugging Face** rather than fighting Kaggle's
+download UI (its `FileLink` and Output-tab download button both regularly
+fail on larger files):
+```python
+from huggingface_hub import login, HfApi
+login(token="<your-hf-write-token>")
+api = HfApi()
+
+api.upload_folder(folder_path="/kaggle/working/results/figures", path_in_repo="figures", repo_id="<your-username>/cape-cub-pf")
+api.upload_file(path_or_fileobj="/kaggle/working/results/tables/metrics_results.csv", path_in_repo="metrics_results.csv", repo_id="<your-username>/cape-cub-pf")
+```
+
+## 16. Recovering from checkpoints — what to run after any interruption
+
+Three scripts in this repo checkpoint their own progress, specifically
+because Kaggle sessions have reset or lost `/kaggle/working` entirely more
+than once during this project. **In every case, the fix is the same: rerun
+the exact same command you were running before the interruption.** Each
+script detects its own checkpoint file and resumes automatically — you do
+not need to pass any special "resume" flag.
+
+**`resumable_extract.py`** (dataset extraction — checkpoints every 500
+images to `<output_dir>/processed/extract_checkpoint.pkl`):
+```python
+!python resumable_extract.py \
+    --data_root /kaggle/input/<dataset-path> \
+    --output_dir /kaggle/working/data
+```
+If this prints `Resuming from checkpoint: N images already done`, it worked.
+If instead you get `_pickle.UnpicklingError: pickle data was truncated`, the
+checkpoint file itself was cut off mid-write by the interruption and is
+unrecoverable — delete it and the (likely also incomplete) pickles, then
+start over from image 0:
+```python
+!rm -f /kaggle/working/data/processed/extract_checkpoint.pkl
+!rm -f /kaggle/working/data/processed/train.pkl /kaggle/working/data/processed/test.pkl
+!python resumable_extract.py --data_root /kaggle/input/<dataset-path> --output_dir /kaggle/working/data
+```
+
+**`train_pf.py`** (PF training — checkpoints every epoch to
+`<output_dir>/checkpoints/<run_name>/latest.pth`):
+```python
+!python src/train_pf.py \
+    --subset_fraction 1.0 --num_epochs 30 --run_name full_pf \
+    --processed_dir /kaggle/working/data/processed \
+    --output_dir /kaggle/working/results
+```
+Using the **same `--run_name`** is what triggers resume — it looks for
+`latest.pth` under that run's checkpoint folder and continues from
+`epoch + 1` if found. A different `--run_name` starts a fresh run instead.
+Unlike extraction, there's no separate "truncated checkpoint" failure mode
+here, since `torch.save` either completes or the file simply won't load —
+if `latest.pth` fails to load, delete it and restart that run from epoch 0.
+
+**`metrics.py`** (evaluation — checkpoints every `--checkpoint_every` images,
+default 100, to `<output_dir>/metrics_checkpoint.pkl`):
+```python
+!python src/metrics.py \
+    --checkpoint {best_pth_path} \
+    --processed_dir /kaggle/working/data/processed \
+    --output_dir /kaggle/working/results/tables \
+    --num_images 5794
+```
+Same rule: rerun the identical command, it prints `Resuming from checkpoint:
+N/5794 images already done` if a checkpoint exists. The checkpoint is
+deleted automatically once a run completes successfully, so a resume prompt
+appearing on a fresh run you didn't expect means a previous run didn't
+finish cleanly — check for a stale checkpoint file before assuming something
+else is wrong.
+
+**If `/kaggle/working` itself is gone** (not just one script's checkpoint,
+but the whole working directory reset — this has happened after toggling
+the GPU accelerator mid-session), none of the above checkpoints survive,
+since they lived inside that wiped folder. In that case:
+- Your **trained model checkpoint is safe** — it's on Hugging Face, pull it
+  back with `hf_hub_download` (Section 15) rather than retraining.
+- Your **extracted dataset pickles are gone** — re-run `resumable_extract.py`
+  from scratch (Section 8).
+- Avoid this going forward by turning the GPU accelerator on **before**
+  cloning/extracting/training anything, and not toggling it again mid-session.
+
 
