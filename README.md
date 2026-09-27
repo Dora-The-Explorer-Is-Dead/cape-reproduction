@@ -74,3 +74,12 @@ uses a learning rate of 1e-4, but the actual configuration file the authors
 released (`configs/cub/resnet50_PF.py`) uses 1e-3. We followed the released
 config rather than the paper text, since that's what actually produced the
 checkpoints we're building on and comparing against.
+
+## Trained checkpoint
+
+Our reproduced CAPE (PF) checkpoint and training logs:
+https://huggingface.co/umamamianoor/cape-cub-pf
+
+Trained for 30 epochs on full CUB-200-2011, batch size 32, lr=1e-3 (per the
+released config; the paper text states 1e-4), T_kld=2, SGD — matching
+configs/cub/resnet50_PF.py from AIML-MED/CAPE.
