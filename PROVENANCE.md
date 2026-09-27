@@ -1,10 +1,13 @@
-# Provenance
-
-Tracks which parts of this repo are our own code, adapted from a reference, or reused as-is.
-
 | File / component | Status | Source |
 |---|---|---|
-| resumable_extract.py | Adapted | AIML-MED/CAPE `datasets.py::_extract()` — added checkpointing every 500 images so extraction survives interruptions |
-| experiments/01_sanity_check.ipynb | Written by us | — |
-| src/explain.py | Adapted | CAM and CAPE maps come directly from AIML-MED/CAPE's model.py forward pass. Grad-CAM and Grad-CAM++ are our own implementation (standard Selvaraju et al. / Chattopadhay et al. formulas — no reference eval script existed in AIML-MED/CAPE to adapt from) |
-| src/metrics.py | Written by us | Implemented from the paper's Section 4.3 equations directly, since AIML-MED/CAPE's repo does not include an evaluation/metrics script |
+| `resumable_extract.py` | Adapted | AIML-MED/CAPE `datasets.py::_extract()` — added checkpointing every 500 images, and support for reading from a plain extracted folder (Kaggle input) in addition to a `.tgz`, since the original only supported tgz |
+| `src/train_pf.py` | Adapted | AIML-MED/CAPE `main.py` + `trainer.py` — added subset sampling (`--subset_fraction`), per-epoch checkpointing with auto-resume, cross-platform reference-repo path detection, and CLI arguments for every config value |
+| `src/explain.py` | Mixed | CAM, CAPE, and μ-CAPE heatmaps are produced by AIML-MED/CAPE's own `model.py` forward pass (`contribution_calculator`, `get_cam_faster`) — reused as-is, we only read the output. Which output key maps to which method (`orig`/`weighted_contribution`+ReLU for CAM, `cape`/`weighted_contribution` for CAPE, `cape`/`logcampe_clip0` for μ-CAPE) is adapted directly from AIML-MED/CAPE's `generate_cam_maps.py`. Grad-CAM and Grad-CAM++ are written by us, from the original papers (Selvaraju et al. 2017; Chattopadhay et al. 2018), since no reference implementation existed in the repo. |
+| `src/metrics.py` | Written by us | Implemented from the paper's Section 4.3 equations directly, since AIML-MED/CAPE's repo does not include an evaluation/metrics script. Includes checkpointing/auto-resume for long runs. |
+| `experiments/01_sanity_check.ipynb` | Written by us | — |
+| Results (`results/tables/metrics_results.csv`, checkpoint on Hugging Face) | Obtained by us | Our own training/evaluation runs — not reported by the paper's authors |
+
+## Notable bugs found and fixed during development
+
+- **CAM/CAPE/μ-CAPE mix-up (src/explain.py):** an early version used `logcampe_clip0` for the "CAPE" heatmap. After finding and reading AIML-MED/CAPE's `generate_cam_maps.py`, we confirmed plain CAPE actually uses `weighted_contribution`, and `logcampe_clip0` is specifically the μ-CAPE quantity. Fixed by reverting CAPE to `weighted_contribution` and adding μ-CAPE as its own method using `logcampe_clip0`.
+- **ADCC coherency formula (src/metrics.py):** the coherency term used `(2*corr + 1) / 2`, which is not a valid min-max normalization of Pearson correlation (range [-1,1] → should map to [0,1] via `(corr + 1) / 2`). This caused ADCC to be inflated by a consistent margin across every method (~87 vs. the paper's ~74-80). Fixed; post-fix ADCC values for CAM/Grad-CAM/Grad-CAM++ landed within ~1 point of the paper's Table 1.
