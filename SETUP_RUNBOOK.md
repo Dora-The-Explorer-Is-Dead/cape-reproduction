@@ -1,7 +1,5 @@
 # Setup Runbook — CAPE Reproduction
 
-This is the lean path — what to actually do, and why each step exists. Earlier attempts hit dead ends (broken Caltech download links, a Windows unzip tool too old for this dataset, a bad `tar` command); none of that is reproduced here, only what actually works.
-
 **Two environments are used together, on purpose:**
 - **Local machine** — where the git repo lives, where you write/edit code, where you push to GitHub. This is your source of truth.
 - **Kaggle Notebooks** — where the dataset lives and where training actually runs, because it has a free GPU and the dataset mounts pre-extracted with no download step. Code is pulled from GitHub into Kaggle, run there, and results (checkpoints, logs) are brought back manually.
