@@ -349,6 +349,33 @@ contributor, and we cannot cleanly separate the two effects without rerunning
 PF training at lr=1e-4 and re-evaluating, which we did not do given time
 constraints on this milestone.
 
+## Testing the learning rate hypothesis
+
+We tested whether the lr=1e-4 vs. 1e-3 discrepancy (paper text vs. released
+config, discussed above) explains CAPE's AD/IC/ADD/ADCC gap by rerunning PF
+training at lr=1e-4 (matching the paper text) and re-evaluating on a partial
+sample (n=1,506, run stopped early due to time constraints).
+
+| Method | AD (lr=1e-3, n=5794) | AD (lr=1e-4, n=1506) |
+|---|---|---|
+| CAPE (PF) | 57.70 | 56.50 |
+
+CAPE's metrics were essentially unchanged across the 10x learning rate
+difference (AD 57.7 vs. 56.5, IC 6.7 vs. 6.8, mIoU 27.0 vs. 26.3) — **this
+rules out the learning rate as the primary cause** of the gap between our
+CAPE reproduction and the paper's reported numbers. The CAM-family methods
+(unaffected by PF training, since they read from the frozen `orig` head)
+also showed only small, sampling-noise-level differences between the two
+runs, which serves as a useful internal check on how much variation to
+expect from sample size alone (n=1506 vs. n=5794).
+
+Given this, we now believe the remaining CAPE gap more likely stems from a
+difference in our AD/IC/ADD masking or normalization implementation
+specifically as it interacts with CAPE's naturally sparse, concentrated
+output — an implementation detail we built from the paper's equations
+without access to the authors' own evaluation code (see PROVENANCE.md) —
+rather than from a difference in how the model itself was trained.
+
 ## Qualitative results: CAM, Grad-CAM, Grad-CAM++, CAPE, and μ-CAPE side by side
 
 Each figure below shows one CUB test image (never seen during training),
