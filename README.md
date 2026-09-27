@@ -210,7 +210,7 @@ isn't meant to dominate every metric — its case rests on the mIoU/
 class-discriminative story and the absolute-contribution framing, not on
 outscoring CAM on AD/IC/ADD/ADCC.
 
-## Reproduction results — full test set (n=5,794, CUB-200-2011)
+## Reproduction results (Quantitative) — full test set (n=5,794, CUB-200-2011)
 
 | Method | AD ↓ | IC ↑ | ADD ↑ | ADCC ↑ | mIoU ↓ | BC |
 |---|---|---|---|---|---|---|
@@ -293,3 +293,39 @@ theirs, independent of learning rate, remains an equally plausible
 contributor, and we cannot cleanly separate the two effects without rerunning
 PF training at lr=1e-4 and re-evaluating, which we did not do given time
 constraints on this milestone.
+
+## Qualitative results: CAM, Grad-CAM, Grad-CAM++, CAPE, and μ-CAPE side by side
+
+Each figure below shows one CUB test image (never seen during training),
+with heatmaps from all five methods generated for the model's own predicted
+class — not the ground-truth label — using our trained PF checkpoint (30
+epochs, full CUB, lr=1e-3).
+
+**Correct, high-confidence predictions:**
+
+![True: 31, Predicted: 31, Confidence: 92.5%](https://huggingface.co/umamamianoor/cape-cub-pf/resolve/main/figures/explain_0_true31_pred31.png)
+*True class 31, predicted class 31, confidence 92.5%*
+
+![True: 18, Predicted: 18, Confidence: 91.7%](https://huggingface.co/umamamianoor/cape-cub-pf/resolve/main/figures/explain_2_true18_pred18.png)
+*True class 18, predicted class 18, confidence 91.7%*
+
+![True: 6, Predicted: 6, Confidence: 94.2%](https://huggingface.co/umamamianoor/cape-cub-pf/resolve/main/figures/explain_4_true6_pred6.png)
+*True class 6, predicted class 6, confidence 94.2%*
+
+**Misclassifications — arguably more informative, since they show what each
+method highlights when the model gets it wrong:**
+
+![True: 10, Predicted: 57, Confidence: 23.2%](https://huggingface.co/umamamianoor/cape-cub-pf/resolve/main/figures/explain_1_true10_pred57.png)
+*True class 10, predicted class 57 (incorrect), confidence 23.2% — low
+confidence reflects the model's own uncertainty here*
+
+![True: 55, Predicted: 115, Confidence: 41.6%](https://huggingface.co/umamamianoor/cape-cub-pf/resolve/main/figures/explain_3_true55_pred115.png)
+*True class 55, predicted class 115 (incorrect), confidence 41.6%*
+
+**Observations:** [fill this in after actually looking at the images
+yourselves — e.g., do CAM and Grad-CAM highlight visually similar regions,
+as expected given they're near-equivalent on this architecture? Does CAPE's
+heatmap look visibly sparser/more concentrated than CAM's, consistent with
+its much lower mIoU in the metrics table above? On the misclassified
+examples, do any methods point at a plausible reason for the confusion —
+e.g., a similar-looking body part between the true and predicted species?]
