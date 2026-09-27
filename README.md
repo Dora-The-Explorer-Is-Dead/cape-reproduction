@@ -133,8 +133,9 @@ checkpoints we're building on and comparing against.
 ## Trained checkpoint
 
 Our reproduced CAPE (PF) checkpoint and training logs:
-https://huggingface.co/umamamianoor/cape-cub-pf \
-or at https://huggingface.co/AyaanArif/cape-cub-pf
+Umama's: https://huggingface.co/umamamianoor/cape-cub-pf \
+Ayaan's: https://huggingface.co/AyaanArif/cape-cub-pf \
+Taher's: https://huggingface.co/tqfaiz/cape-cub-pf
 
 Trained for 30 epochs on full CUB-200-2011, batch size 32, lr=1e-3 (per the
 released config; the paper text states 1e-4), T_kld=2, SGD — matching
