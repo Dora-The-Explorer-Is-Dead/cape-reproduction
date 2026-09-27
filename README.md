@@ -83,3 +83,88 @@ https://huggingface.co/umamamianoor/cape-cub-pf
 Trained for 30 epochs on full CUB-200-2011, batch size 32, lr=1e-3 (per the
 released config; the paper text states 1e-4), T_kld=2, SGD — matching
 configs/cub/resnet50_PF.py from AIML-MED/CAPE.
+
+## What these metrics actually measure, and why they matter
+
+All six of these come from the paper's Section 4.3, and they exist to answer
+one underlying question: when a heatmap points at part of an image and says
+"the model looked here," is that actually true in a way you can verify, not
+just visually plausible?
+
+**AD (Average Drop)** and **IC (Average Increase)** work the same basic way:
+take the image, multiply it by the explanation map so only the highlighted
+region survives, and feed that masked image back through the classifier. If
+the explanation map genuinely captured the evidence the model relied on, the
+model's confidence on that masked image should barely drop — because you've
+kept the part that actually mattered and thrown away the rest. AD measures
+how much confidence is lost when you do this (lower is better — less lost
+means the highlighted region really was the important part). IC measures the
+opposite direction: sometimes masking out distracting background actually
+*increases* confidence, and IC just counts how often that happens (higher is
+better).
+
+**ADD (AD in Deletion)** flips the mask around: instead of keeping only the
+highlighted region, you delete it and keep everything else. If the
+explanation map is accurate, removing it should hurt the model a lot — a big
+drop in confidence here is a *good* sign, meaning the region really was
+load-bearing (so, unlike AD, higher ADD is better).
+
+**ADCC** exists because AD and IC alone can be gamed — a method that just
+highlights the entire image trivially scores well on both. ADCC combines
+three things at once: coherency (does re-running the explanation method on
+the masked image give you back a similar map, i.e. is the explanation
+self-consistent?), complexity (how much of the image did the method bother
+highlighting — a method that lights up everything is being lazy, not
+informative), and AD. A method has to do well on all three simultaneously to
+score well here, which makes it harder to cheat.
+
+**mIoU** measures something different from faithfulness: how much do the
+explanation maps for the model's top-2 predicted classes overlap with each
+other? A method with low mIoU is telling you something class-specific — "this
+looks like a Pileated Woodpecker *because of this region*, and that's a
+different region than what would make it look like a Red-headed Woodpecker
+instead." A method with high mIoU is largely just highlighting "the bird" in
+general, regardless of which of the two species it's deciding between — less
+useful for understanding *why* it picked one over the other.
+
+**BC (Borda Count)** isn't its own measurement — it's a ranking system
+applied after the fact. Every method gets ranked against the others on each
+of the five metrics above (3 points for 1st place, 2 for 2nd, 1 for 3rd, 0
+otherwise), and BC is just the sum of those ranking points across all five
+metrics — one combined scoreboard instead of five separate tables.
+
+## If CAM and CAPE score similarly here, what's actually the point of CAPE?
+
+This is a fair question, and the honest answer is: **these faithfulness
+metrics were never CAPE's main selling point** — even in the paper's own
+Table 1, CAPE (PF) doesn't clearly beat CAM across the board (CAPE's ADCC is
+actually *lower* than CAM's, 73.7 vs 78.8). What CAPE is actually solving is
+a structural problem CAM has, not a faithfulness problem: CAM's heatmap tells
+you *where* the model looked, but the numbers on that heatmap don't mean
+anything on their own — you can't say "this region is worth 12% of the
+decision," and you can't meaningfully compare a heatmap for "woodpecker"
+against a heatmap for "albatross," because CAM's values for each class are
+computed independently with no shared scale between them.
+
+CAPE's actual contribution is that its per-region values are constructed so
+they **sum to exactly the model's confidence score** and are on a genuinely
+comparable scale across different classes — meaning you can look at a CAPE
+map and say something quantitative like "this beak region contributed 18% of
+the total 92% confidence," and compare that contribution directly against
+what the same region contributes toward a different candidate class. CAM
+literally cannot make either of those statements, no matter how good its
+heatmap looks or how well it scores on AD/IC. That's a difference in what
+kind of question the explanation can answer, not a difference in how good
+the explanation looks — which is exactly why it doesn't necessarily show up
+as CAPE "winning" on faithfulness metrics that were designed around CAM-style
+methods in the first place.
+
+The paper's own strongest results actually come from **μ-CAPE** (a variant
+that restores some of the class-overlap CAPE otherwise suppresses), which
+does top the Borda Count rankings in their Table 1 — we implemented plain
+CAPE, not μ-CAPE, since that was the tractable scope for this reproduction.
+That's worth stating directly: our numbers are a fair test of what CAPE (not
+μ-CAPE) actually delivers, and the paper's own results suggest CAPE alone
+isn't meant to dominate every metric — its case rests on the mIoU/
+class-discriminative story and the absolute-contribution framing, not on
+outscoring CAM on AD/IC/ADD/ADCC.
