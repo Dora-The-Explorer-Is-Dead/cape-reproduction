@@ -147,6 +147,3 @@ Every new or adapted file gets a row in `PROVENANCE.md` the same day it's writte
 
 ---
 
-## If something doesn't match this runbook
-
-Different Kaggle re-upload showing up in search, a Mac instead of Windows, a Kaggle UI change — whatever it is, don't silently work around it and move on. Post the exact command and exact error in the group chat, and once resolved, add it back into this file so the next person doesn't repeat the same detour.
