@@ -1,7 +1,5 @@
 # Setup Runbook — CAPE Reproduction
 
-This is the lean path — what to actually do, and why each step exists. Earlier attempts hit dead ends (broken Caltech download links, a Windows unzip tool too old for this dataset, a bad `tar` command); none of that is reproduced here, only what actually works.
-
 **Two environments are used together, on purpose:**
 - **Local machine** — where the git repo lives, where you write/edit code, where you push to GitHub. This is your source of truth.
 - **Kaggle Notebooks** — where the dataset lives and where training actually runs, because it has a free GPU and the dataset mounts pre-extracted with no download step. Code is pulled from GitHub into Kaggle, run there, and results (checkpoints, logs) are brought back manually.
@@ -56,9 +54,11 @@ You'll see this word a lot. A `.tgz` (`.tar.gz`) is a folder of files bundled in
 1. Go to `kaggle.com` → **Code** → **New Notebook**
 2. Right sidebar → **+ Add Input** → search "CUB 200 2011" → add a dataset that includes `images.txt`, `train_test_split.txt`, and an `images/` folder (preview it before adding to check)
 3. It mounts pre-extracted at `/kaggle/input/<dataset-name>/` — no download or unzip needed at all
-4. **Check the exact path**, since some uploads nest an extra folder:
+4. This is the exact link we're using: [CUB_200_2011](https://www.kaggle.com/datasets/wenewone/cub2002011)
 ```python
-!ls /kaggle/input/<dataset-name>
+!ls /kaggle/input # this will tell you what folder is inside it which you will replace <dataset-name> with in the line below.
+!ls /kaggle/input/<dataset-name> # keep going down the directories till you reach CUB_200_2011 which will have another CUB_200_2011 in it as the line below demonstrates
+# execute this third line once your directory looks like this:
 !ls /kaggle/input/<dataset-name>/CUB_200_2011/CUB_200_2011   # if double-nested
 ```
 You're looking for `images.txt`, `images/`, `train_test_split.txt`, `classes.txt` — note however many folders deep they actually are, you'll pass that exact path as `--data_root` in step 6.
@@ -149,6 +149,3 @@ Every new or adapted file gets a row in `PROVENANCE.md` the same day it's writte
 
 ---
 
-## If something doesn't match this runbook
-
-Different Kaggle re-upload showing up in search, a Mac instead of Windows, a Kaggle UI change — whatever it is, don't silently work around it and move on. Post the exact command and exact error in the group chat, and once resolved, add it back into this file so the next person doesn't repeat the same detour.
