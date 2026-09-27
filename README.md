@@ -1,4 +1,49 @@
-## What CAPE actually is, and what we're doing here
+## Literature review
+
+**The problem.** Deep neural network classifiers are accurate but opaque —
+given an image and a predicted class, there's no built-in way to see which
+parts of the image actually drove that decision. Class Activation Mapping
+(CAM) methods emerged to address this by producing a heatmap over the input
+image showing where the model "looked." But CAM-family heatmaps only carry
+*relative* information: they can say one region got more attention than
+another, but not how much any region actually contributed to the model's
+confidence, and their values for one candidate class can't be meaningfully
+compared against another candidate class's heatmap for the same image.
+
+**Prior work.** CAM (Zhou et al., 2016) was the first method, computing a
+heatmap directly from a classifier's final linear layer weights — but it
+only works on networks with global-average-pooling immediately before that
+layer. Grad-CAM (Selvaraju et al., 2017) generalized this to arbitrary CNN
+architectures by substituting gradients of the class score with respect to
+the last convolutional layer in place of the classifier's own weights.
+Grad-CAM++ (Chattopadhay et al., 2018) refined the weighting further using
+second-order gradient terms, improving localization when a class appears
+multiple times in one image. Score-CAM (Wang et al., 2020) took a different,
+perturbation-based approach — instead of using gradients, it directly
+measures how much each region's presence changes the model's confidence,
+which produces strong results but requires a separate forward pass per
+region, making it far slower at inference (the CAPE paper reports ~15
+seconds per image for Score-CAM, versus ~150 milliseconds for CAM and CAPE).
+None of these methods produce a heatmap whose values have any absolute
+meaning beyond relative comparison within a single image.
+
+**What CAPE changes.** CAPE (Chowdhury et al., CVPR 2024) reformulates the
+classifier's output as a probabilistic ensemble, so that a region's heatmap
+value has a genuine, comparable meaning: the sum of all per-region
+contributions for a class exactly equals the model's confidence in that
+class. This makes it possible to say a specific region is responsible for,
+say, 18% of a 92% confidence score — a statement no CAM-family method can
+make — and to directly compare a region's contribution across different
+candidate classes for the same image. A companion variant, μ-CAPE, restores
+some of the "class-mutual" regions that plain CAPE's sharper,
+class-discriminative focus tends to suppress, trading some of that sharpness
+for broader coverage.
+
+**Reception.** [Add 1-2 sentences here once you've checked Google Scholar's
+"Cited by" for this paper — who has built on or applied CAPE since
+publication, and in what direction.]
+
+## What CAPE actually is, and what we're doing here in simpler words
 
 Deep learning classifiers are usually black boxes — a model looks at an image
 and says "97% Pileated Woodpecker," but doesn't say why. CAM (Class Activation
@@ -329,3 +374,56 @@ heatmap look visibly sparser/more concentrated than CAM's, consistent with
 its much lower mIoU in the metrics table above? On the misclassified
 examples, do any methods point at a plausible reason for the confusion —
 e.g., a similar-looking body part between the true and predicted species?]
+
+## Design & workflow
+
+**Environment split.** We developed and version-controlled everything
+locally (Git Bash on Windows), but moved all dataset storage and GPU
+compute to Kaggle Notebooks after the original Caltech dataset host proved
+unreliable (broken redirect links returning HTML instead of the actual
+file) and local CPU training was impractically slow for a 30-epoch
+ResNet-50 run. GitHub remained the single source of truth throughout —
+Kaggle sessions pull code from the repo, run it, and push results back out
+to Hugging Face (for the trained checkpoint, logs, and figures) rather than
+storing anything long-term in Kaggle's own ephemeral working directory,
+after losing session state to unexpected resets more than once during
+development.
+
+**Reproducing PF training.** We use the authors' released TS checkpoint as
+the frozen starting point for PF training, updating only the CAPE
+classifier head and its three temperature parameters via the distillation
+loss described in their `trainer.py`. We found and corrected a discrepancy
+between the paper's stated PF learning rate (1e-4) and the value in the
+released config file (1e-3); we used the config's value, since it's what
+actually produced the checkpoints we build on, and documented the
+disagreement rather than silently picking one.
+
+**Generating and evaluating explanations.** CAM, CAPE, and μ-CAPE heatmaps
+come directly from the authors' own model — no reimplementation needed, only
+correctly identifying which output tensor corresponds to which method, which
+we verified against their `generate_cam_maps.py` script. Grad-CAM and
+Grad-CAM++ have no reference implementation in the repo, so we implemented
+them from their original papers. The paper's six evaluation metrics (AD, IC,
+ADD, ADCC, mIoU, BC) similarly have no reference evaluation script in the
+repo, so we implemented them directly from the paper's Section 4.3 equations.
+
+**Catching our own mistakes.** Two errors surfaced during development that
+are worth describing rather than hiding, since finding and fixing them is
+part of what this milestone is meant to demonstrate. First, we initially
+mislabeled μ-CAPE's heatmap (`logcampe_clip0`) as plain CAPE's, producing
+CAPE metrics that looked deceptively close to CAM's — cross-checking against
+`generate_cam_maps.py` once we found it revealed the mistake, and reverting
+to the correct quantity (`weighted_contribution`) produced results that
+better matched the paper's qualitative claim about CAPE's low mIoU. Second,
+an incorrect min-max normalization in our ADCC coherency formula was
+inflating ADCC by a consistent margin across every method; fixing it brought
+our CAM-family ADCC values to within about a point of the paper's own
+numbers, confirming the fix.
+
+**What we chose not to chase further.** CAPE's AD/IC/ADD/ADCC did not
+reproduce as closely as the CAM-family methods did (see Reproduction
+Results). We have a specific, testable hypothesis for why (the learning
+rate discrepancy above), but did not rerun the full 30-epoch training at
+1e-4 to confirm it, given the time this milestone allows — we report the
+hypothesis honestly as untested rather than either hiding the gap or
+presenting the hypothesis as a confirmed explanation.
