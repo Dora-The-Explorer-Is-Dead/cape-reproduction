@@ -97,9 +97,18 @@ def ad_in_deletion(y_c, d_c):
 
 
 def coherency(e_c, e_c_prime):
-    """coh(Ec, E'c) = (2*corr(Ec, E'c) + 1) / 2 — min-max-normalized Pearson correlation
-    between the original explanation map and the explanation map recomputed from the
-    masked (Ec-only) image."""
+    """
+    coh(Ec, E'c) = (corr(Ec, E'c) + 1) / 2 — min-max normalization of Pearson
+    correlation (range [-1, 1]) into [0, 1], per ADCC (Poppi et al.), which the
+    CAPE paper's Section 4.3 cites for this metric.
+
+    BUG FIX: an earlier version of this function used (2*corr + 1) / 2, which
+    simplifies to corr + 0.5 — not a valid [0,1] normalization (corr=1 gives 1.5,
+    not 1.0). This inflated coherency, and therefore ADCC, consistently across
+    every method (observed: ~87 for all methods vs. the paper's ~74-80) — a
+    uniform offset rather than a per-method error is exactly the signature of a
+    formula bug like this rather than a reproduction-quality issue.
+    """
     a = e_c.flatten()
     b = e_c_prime.flatten()
     if a.std() < 1e-8 or b.std() < 1e-8:
@@ -108,7 +117,7 @@ def coherency(e_c, e_c_prime):
         corr = np.corrcoef(a, b)[0, 1]
         if np.isnan(corr):
             corr = 0.0
-    return (2 * corr + 1) / 2
+    return (corr + 1) / 2
 
 
 def complexity(e_c):
@@ -200,7 +209,7 @@ def main():
     indices = np.random.RandomState(args.seed).choice(len(test_data), size=n, replace=False)
     print(f'Evaluating on {n} test images (full test set is {len(test_data)})')
 
-    methods = ['CAM', 'Grad-CAM', 'Grad-CAM++', 'CAPE']
+    methods = ['CAM', 'Grad-CAM', 'Grad-CAM++', 'CAPE', 'mu-CAPE']
     running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': []} for m in methods}
     all_maps_by_method = {m: [] for m in methods}  # for mIoU, need top-2 class maps per image
 
