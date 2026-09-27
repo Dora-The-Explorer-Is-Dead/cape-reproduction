@@ -261,3 +261,35 @@ reproduced closely.
 to CAM's own numbers, though without the clear separation the paper reports
 (μ-CAPE(PF) AD 15.9, notably better than CAM's 21.2 in the paper; ours is
 comparable to, not better than, CAM).
+
+## Could the learning rate discrepancy explain CAPE's gap?
+
+Section 4.1 of the paper states PF training uses a learning rate of 1e-4, but
+the released config file (`configs/cub/resnet50_PF.py`) uses 1e-3 — we
+followed the released config, since it's what actually produced the
+checkpoints we built on. We think this discrepancy is a plausible
+contributor to CAPE's AD/IC/ADD/ADCC gap, though we have not confirmed it
+experimentally.
+
+The reasoning: PF training only updates the CAPE head and three learnable
+temperature parameters, which directly control how sharply the model's
+softmax-style normalization squashes its output. A 10x higher learning rate
+plausibly pushed these temperatures toward a sharper, more extreme final
+state than the authors' own PF-trained model reached. This would predict a
+CAPE explanation map that is *more* peaky and class-discriminative than
+theirs — and that prediction lines up with what we actually observed: our
+CAPE mIoU (26.97) correctly reproduces the paper's finding that CAPE is far
+more class-discriminative than CAM (74.91), while AD and IC collapse far
+more severely (57.7 and 6.7 vs. the paper's 22.2 and 26.5) than the paper's
+own CAPE row would suggest — consistent with a heatmap so concentrated that
+masking to "only the highlighted region" discards nearly the entire image.
+
+That said, this is a plausible, internally-consistent hypothesis, not a
+confirmed diagnosis. We did not have access to the authors' own trained
+temperature values to compare against, and our AD/IC/ADD implementation was
+built directly from the paper's equations without their evaluation code (see
+PROVENANCE.md) — a masking or normalization convention that differs from
+theirs, independent of learning rate, remains an equally plausible
+contributor, and we cannot cleanly separate the two effects without rerunning
+PF training at lr=1e-4 and re-evaluating, which we did not do given time
+constraints on this milestone.
