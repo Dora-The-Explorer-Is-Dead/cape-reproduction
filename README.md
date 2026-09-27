@@ -39,11 +39,21 @@ some of the "class-mutual" regions that plain CAPE's sharper,
 class-discriminative focus tends to suppress, trading some of that sharpness
 for broader coverage.
 
-**Reception.** [Add 1-2 sentences here once you've checked Google Scholar's
-"Cited by" for this paper — who has built on or applied CAPE since
-publication, and in what direction.]
+**Reception.** CAPE was published in June 2024, making it recent enough that
+citation tracking tools show limited uptake so far (aggregators like AMiner
+list only a handful of citations as of this writing) — reception is still
+emerging rather than established. The most concrete related development we
+found is from the same lead author and several co-authors: a 2025 preprint,
+*"Looking in the mirror: A faithful counterfactual explanation method for
+interpreting deep image classification models"* (Chowdhury et al., 2025),
+which continues the same research group's broader interpretability agenda.
+The same group has also published related explainability work around this
+time (e.g., AdaCBM, an adaptive concept bottleneck model for diagnosis),
+suggesting CAPE sits within a larger, ongoing research program on
+trustworthy DNN interpretation for both natural images and clinical
+diagnosis, rather than a one-off contribution.
 
-## What CAPE actually is, and what we're doing here in simpler words
+## What CAPE actually is, and what we're doing here (in simpler words)
 
 Deep learning classifiers are usually black boxes — a model looks at an image
 and says "97% Pileated Woodpecker," but doesn't say why. CAM (Class Activation
@@ -130,7 +140,7 @@ Trained for 30 epochs on full CUB-200-2011, batch size 32, lr=1e-3 (per the
 released config; the paper text states 1e-4), T_kld=2, SGD — matching
 configs/cub/resnet50_PF.py from AIML-MED/CAPE.
 
-## The explanation methods, and how they differ
+## The explanation methods, and how they differ (more detail and understanding)
 
 **CAM** (Zhou et al., 2016) is the original method. It only works on networks
 with a specific architecture — global average pooling immediately followed by
@@ -367,13 +377,19 @@ confidence reflects the model's own uncertainty here*
 ![True: 55, Predicted: 115, Confidence: 41.6%](https://huggingface.co/umamamianoor/cape-cub-pf/resolve/main/figures/explain_3_true55_pred115.png)
 *True class 55, predicted class 115 (incorrect), confidence 41.6%*
 
-**Observations:** [fill this in after actually looking at the images
-yourselves — e.g., do CAM and Grad-CAM highlight visually similar regions,
-as expected given they're near-equivalent on this architecture? Does CAPE's
-heatmap look visibly sparser/more concentrated than CAM's, consistent with
-its much lower mIoU in the metrics table above? On the misclassified
-examples, do any methods point at a plausible reason for the confusion —
-e.g., a similar-looking body part between the true and predicted species?]
+**Observations:** CAPE consistently highlights only a very small, tightly
+concentrated part of the bird in each image — a single sharp region rather
+than a broader shape — visibly sparser than every other method. This matches
+its much lower mIoU in the metrics table (26.97 vs. CAM's 74.91): a heatmap
+that only ever lights up one small area for one class naturally overlaps far
+less with the heatmap for a different candidate class. μ-CAPE, by contrast,
+highlights largely the same regions as the CAM family, just somewhat
+dimmer/softer in intensity — consistent with its role as a "restore some of
+what CAPE suppresses" variant, and consistent with its mIoU (83.29) sitting
+close to CAM's rather than near CAPE's. This qualitative pattern is exactly
+what the paper's own framing predicts: CAPE trades coverage for sharp
+class-discriminativeness, μ-CAPE trades some of that sharpness back for
+broader, CAM-like coverage.
 
 ## Design & workflow
 
@@ -396,7 +412,7 @@ loss described in their `trainer.py`. We found and corrected a discrepancy
 between the paper's stated PF learning rate (1e-4) and the value in the
 released config file (1e-3); we used the config's value, since it's what
 actually produced the checkpoints we build on, and documented the
-disagreement rather than silently picking one.
+disagreement rather than silently just picking one.
 
 **Generating and evaluating explanations.** CAM, CAPE, and μ-CAPE heatmaps
 come directly from the authors' own model — no reimplementation needed, only
