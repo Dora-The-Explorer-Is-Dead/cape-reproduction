@@ -137,8 +137,16 @@ def generate_all_maps(net, image_tensor, target_class, hooks):
     cam_map = outputs['orig']['cls_map'][:, target_class:target_class + 1]
     cam_map = normalize_map(cam_map)
 
-    # CAPE: the model's own reformulated contribution map for the target class
-    cape_map = outputs['cape']['weighted_contribution'][:, target_class:target_class + 1]
+    # CAPE: use logcampe_clip0, not weighted_contribution. weighted_contribution is
+    # jointly softmax-normalized across all 200 classes AND all spatial positions at
+    # once (39,200-way normalization), so a single class's 14x14 slice is extremely
+    # peaky/near-zero almost everywhere after that global squashing — min-max
+    # normalizing it produces an almost-binary mask covering a tiny image region,
+    # which caused pathological AD/IC/mIoU values in initial testing (AD ~68% vs the
+    # paper's ~22%). logcampe_clip0 is the log-domain, non-fully-squashed version of
+    # the same information (the name reads as "log CAM-CAPE") and is a much more
+    # plausible match for what the paper actually visualizes as the CAPE heatmap.
+    cape_map = outputs['cape']['logcampe_clip0'][:, target_class:target_class + 1]
     cape_map = normalize_map(cape_map)
 
     # Grad-CAM / Grad-CAM++: need a fresh forward pass with grad enabled,
