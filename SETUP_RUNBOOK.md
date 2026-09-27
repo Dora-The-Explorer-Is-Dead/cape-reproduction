@@ -1,146 +1,154 @@
 # Setup Runbook — CAPE Reproduction
 
-Everything needed to get from a fresh machine to a passing sanity check. Follow it in order. This has been corrected against what actually worked, not the first attempt — some sub-steps below fixed real mistakes from earlier tries.
+This is the lean path — what to actually do, and why each step exists. Earlier attempts hit dead ends (broken Caltech download links, a Windows unzip tool too old for this dataset, a bad `tar` command); none of that is reproduced here, only what actually works.
 
-**Use Git Bash for all commands below**, not Windows cmd.exe.
+**Two environments are used together, on purpose:**
+- **Local machine** — where the git repo lives, where you write/edit code, where you push to GitHub. This is your source of truth.
+- **Kaggle Notebooks** — where the dataset lives and where training actually runs, because it has a free GPU and the dataset mounts pre-extracted with no download step. Code is pulled from GitHub into Kaggle, run there, and results (checkpoints, logs) are brought back manually.
 
 ---
 
-## 1. Clone the repo
+## 1. Clone the repo (local)
 
 ```bash
 git clone https://github.com/Dora-The-Explorer-Is-Dead/cape-reproduction
 cd cape-reproduction
 ```
 
-If "repository not found," check the exact URL on GitHub.com — usernames only contain letters, numbers, and hyphens (no underscores).
+**Use Git Bash on Windows**, not cmd.exe — cmd doesn't understand `mkdir -p`, `touch`, or forward-slash paths the way every command below assumes.
 
-## 2. Set up the Python environment
+## 2. Set up the Python environment (local)
 
 ```bash
 python -m venv venv
-source venv/Scripts/activate
-```
-> On Windows the activation script is at `venv/Scripts/activate`, not `venv/bin/activate`.
-
-You'll see `(venv)` at the start of your prompt once it's active.
-
-```bash
+source venv/Scripts/activate        # Windows: Scripts, not bin — that's the Mac/Linux path
 python -m pip install --upgrade pip
 python -m pip install torch torchvision numpy pandas matplotlib scikit-learn tqdm tensorboard jupyter
 ```
-> If `pip install ...` gives `Permission denied`, use `python -m pip install ...` instead.
->
-> If it still fails, check `echo $HOME` for "OneDrive" — a OneDrive-synced project folder can lock files mid-write. Move the project to a non-synced folder if so, and recreate the venv there.
 
-## 3. Get the CUB-200-2011 dataset
+*Why `python -m pip install` instead of plain `pip install`:* Git Bash on Windows sometimes can't execute `pip.exe` directly (`Permission denied`), but can always run `python.exe`, which can invoke pip as a module. Use this form everywhere.
 
-The original Caltech host's links redirect to broken HTML pages — don't bother with `curl`/`wget` against `data.caltech.edu` or `vision.caltech.edu`.
+You only need this environment locally for writing/testing code in small pieces (e.g. the sanity check on a tiny batch). Real training happens on Kaggle, which has its own environment.
 
-**Use the Kaggle mirror, downloaded through the browser (not the API/CLI — simpler and avoids token setup issues):**
+## 3. Clone the official CAPE reference repo (local)
 
-1. Go to `https://www.kaggle.com/datasets/wenewone/cub2002011` (or search "CUB 200 2011" on Kaggle if that page has moved) and log in.
-2. Click **Download**, choose curl/direct download as offered, and let it save to your normal Downloads folder.
-3. Move it into place and extract with Python (Git Bash's built-in `unzip` is too old for this file's Zip64 format and will fail — don't use it):
-```bash
-mv ~/Downloads/cub2002011.zip ~/cape-reproduction/data/
-cd ~/cape-reproduction/data
-python -c "import zipfile; zipfile.ZipFile('cub2002011.zip').extractall('CUB_200_2011')"
-```
-4. Check what you got:
-```bash
-ls CUB_200_2011
-```
-This particular upload **double-nests** the dataset (a `CUB_200_2011` folder inside `CUB_200_2011`) alongside two unused folders (`cvpr2016_cub/` — unrelated caption dataset, `segmentations/` — unused masks, both safe to ignore). Confirm the nested folder has the real files:
-```bash
-ls CUB_200_2011/CUB_200_2011
-```
-You should see `images/`, `images.txt`, `image_class_labels.txt`, `train_test_split.txt`, `classes.txt`. **Don't try to flatten/rename this folder** — Windows file locks can cause `Permission denied` on the rename. Just reference the nested path directly, as below.
-
-5. The official CAPE repo's dataset loader (`datasets.py`) expects a `CUB_200_2011.tgz` file directly in the data root, not a loose folder. Repack it — **this exact command matters**, an earlier version of this step had the folder-prefix wrong and caused a `KeyError` later on:
-```bash
-cd ~/cape-reproduction/data
-tar -czf CUB_200_2011.tgz -C CUB_200_2011 CUB_200_2011/images.txt CUB_200_2011/train_test_split.txt CUB_200_2011/images
-```
-6. **Verify the internal paths are correct before moving on** — this is the step that catches the bug the hard way if skipped:
-```bash
-tar -tzf CUB_200_2011.tgz | head -5
-```
-You must see paths prefixed with `CUB_200_2011/`, e.g.:
-```
-CUB_200_2011/images.txt
-CUB_200_2011/train_test_split.txt
-CUB_200_2011/images/001.Black_footed_Albatross/...
-```
-If you instead see bare `images.txt` with no prefix, the tgz was built wrong and extraction will fail with `KeyError: "filename 'CUB_200_2011/images.txt' not found"` later — delete it and redo step 5.
-
-Full details also live in `data/README.md` inside the repo.
-
-## 4. Clone the official CAPE reference repo
-
-Separate clone, **outside** `cape-reproduction` — reference material only, not part of our submission.
+A separate clone, **outside** `cape-reproduction` — it's reference material we read from and adapt, not part of our submission.
 
 ```bash
 cd ~
 git clone https://github.com/AIML-MED/CAPE.git cape-reference
 cd cape-reference
-```
-
-Confirm the pretrained checkpoints are real files, not tiny Git LFS pointers:
-```bash
 ls -lh saved_models
 ```
-Expect `cub_resnet50_PF.pth` and `cub_resnet50_TS.pth`, each ~94MB. If only a few KB, run `git lfs install && git lfs pull`.
 
-## 5. Extract the dataset (resumable — do this before the notebook, not inside it)
+*Why:* the authors provide the actual paper architecture (`models/model.py`), the actual distillation loss (`models/losses.py`), and — usefully — their own pretrained CUB checkpoints (`cub_resnet50_TS.pth`, `cub_resnet50_PF.pth`, ~94MB each). Confirm those two files are really ~94MB and not a few KB (a few KB would mean Git LFS didn't pull the real weights — if so, run `git lfs install && git lfs pull`).
 
-The official `datasets.py` only saves to disk once, at the very end of processing all ~11,788 images — so any interruption (sleep, disconnect, crash) loses all progress and you start over from zero. Use the checkpointed version instead, which saves every 500 images and resumes automatically. `resumable_extract.py` lives in the repo root — see `PROVENANCE.md` for what it changes vs. the original.
+*What we don't do:* run their `main.py` directly. We understood their config and model/loss code, then wrote our own scripts (`resumable_extract.py`, `src/train_pf.py`) adapted from it — logged in `PROVENANCE.md`.
 
-```bash
-cd ~/cape-reproduction
-source venv/Scripts/activate
-python resumable_extract.py
+## 4. Understand `.tgz`, briefly
+
+You'll see this word a lot. A `.tgz` (`.tar.gz`) is a folder of files bundled into one archive (`tar`) and then compressed (`gz`). The authors' dataset-loading code (`datasets.py`) expects the CUB dataset as exactly this: one `CUB_200_2011.tgz` file, with files inside it at the exact internal path `CUB_200_2011/images.txt` etc. — not a loose folder of already-extracted files. This detail caused real breakage earlier (a `KeyError` when an internal path didn't match), which is why our own extraction script (`resumable_extract.py`) works from *either* a tgz *or* an already-extracted folder — see step 6.
+
+## 5. Get the dataset — via Kaggle (recommended path)
+
+**Don't download the dataset to your local machine.** The original Caltech host's links are broken (redirect to HTML error pages), and even a working download means fighting Windows' outdated `unzip` and manually flattening a double-nested folder. Kaggle skips all of this:
+
+1. Go to `kaggle.com` → **Code** → **New Notebook**
+2. Right sidebar → **+ Add Input** → search "CUB 200 2011" → add a dataset that includes `images.txt`, `train_test_split.txt`, and an `images/` folder (preview it before adding to check)
+3. It mounts pre-extracted at `/kaggle/input/<dataset-name>/` — no download or unzip needed at all
+4. **Check the exact path**, since some uploads nest an extra folder:
+```python
+!ls /kaggle/input/<dataset-name>
+!ls /kaggle/input/<dataset-name>/CUB_200_2011/CUB_200_2011   # if double-nested
+```
+You're looking for `images.txt`, `images/`, `train_test_split.txt`, `classes.txt` — note however many folders deep they actually are, you'll pass that exact path as `--data_root` in step 6.
+
+*Why Kaggle over local:* the whole point of a dataset host is to skip download/extraction pain — Kaggle's mount does that for you. If you ever do need the dataset locally too (e.g. offline work), the same Kaggle "Download" button works, but expect the same double-nesting and use Python's zipfile (`python -c "import zipfile; zipfile.ZipFile('<file>.zip').extractall('CUB_200_2011')"`) instead of `unzip`, which is too old on Git Bash for this file's format.
+
+## 6. Turn on the GPU (Kaggle)
+
+Right sidebar → **Session options** (a gear/settings icon if not labeled) → **Accelerator** → **GPU T4 x2**. First time, Kaggle may ask for phone verification — complete it, it's one-time.
+
+Confirm it's active:
+```python
+import torch
+print(torch.cuda.is_available(), torch.cuda.get_device_name(0) if torch.cuda.is_available() else "no GPU")
 ```
 
-Before running, disable sleep so a long extraction isn't interrupted: **Settings → System → Power & battery → Screen and sleep → set to Never** while plugged in.
+## 7. Clone both repos into the Kaggle session
 
-Run this directly in the terminal (not inside a Jupyter cell) so a browser tab issue can't affect it. If it does get interrupted, just re-run the same command — it picks up from the last checkpoint instead of starting over. It's done when you see:
-```
-Wrote train.pkl and test.pkl — the real CUB200 class will now load instantly.
-```
-
-This only needs to happen once — after this, both the sanity check notebook and any real training run will load the dataset near-instantly from the cached `.pkl` files.
-
-## 6. Run the sanity check
-
-```bash
-cd ~/cape-reproduction
-source venv/Scripts/activate
-python -m pip install -r ~/cape-reference/requirements.txt
-jupyter notebook experiments/01_sanity_check.ipynb
+```python
+!git clone https://github.com/Dora-The-Explorer-Is-Dead/cape-reproduction.git
+!git clone https://github.com/AIML-MED/CAPE.git cape-reference
+%cd cape-reproduction
+!pip install -r /kaggle/working/cape-reference/requirements.txt
 ```
 
-Run every cell top to bottom with **Shift+Enter**, waiting for `[*]` to turn into a number before running the next cell — don't skip ahead or run cells out of order, since later cells depend on variables from earlier ones.
+## 8. Extract the dataset into pickles (Kaggle)
 
-Expected outputs:
-- Batch loads near-instantly (dataset is already extracted from step 5)
-- `cape cls_map shape: torch.Size([4, 200, 14, 14])` followed by `Shape checks passed.`
-- 10 lines of `step N: loss=...`, with `All losses finite: True` and `Loss decreased overall: True`
-- A small plot showing the loss trending downward
+```python
+!python resumable_extract.py \
+    --data_root /kaggle/input/<dataset-name>/CUB_200_2011/CUB_200_2011 \
+    --output_dir /kaggle/working/data
+```
 
-Don't move on to a real training run until every cell above passes cleanly.
+*Why this script and not the authors' own extraction:* their `CUB200` class does the full ~11,788-image extraction in memory and only saves to disk once, at the very end — any interruption loses everything. `resumable_extract.py` checkpoints every 500 images and resumes automatically if interrupted. It also reads from a plain folder (what Kaggle gives you) as well as a tgz, so no repacking step is needed here at all — that repacking was only ever required for the *local* Windows attempt, and doesn't apply on Kaggle. `/kaggle/input` is read-only, which is why `--output_dir` points at `/kaggle/working` instead.
 
-## 7. Log what you did
+This produces `processed/train.pkl` and `processed/test.pkl` under `--output_dir`, used by every training run from here on.
 
-Every time you add or adapt a file, add a row to `PROVENANCE.md` immediately — don't wait until report time to reconstruct it. Current entries as of this runbook:
+## 9. Understand PF, briefly
 
-| File / component | Status | Source |
+CAPE has two training modes:
+- **TS (Training from Scratch)** — backbone + classifier + CAPE layer all train together.
+- **PF (Post-Fitting)** — start from an already-trained model (the authors' TS checkpoint), freeze everything except the small CAPE layer, and fine-tune just that. Far cheaper — this is what we implement.
+
+`src/train_pf.py` does this: loads the TS checkpoint, freezes the backbone and the vanilla classifier, and trains only the CAPE head + three small temperature parameters, using a distillation loss that teaches CAPE's output to match the frozen classifier's predictions.
+
+## 10. Run the sanity check first — always, before any real training
+
+Locally, in Jupyter (`experiments/01_sanity_check.ipynb`), on a tiny in-memory batch: confirms shapes are right (14×14×200 class activation maps) and the loss is finite and decreasing over a few steps, using CPU. Cheap and fast — no need for a GPU or the full dataset for this part. Do this once per code change to the model/loss/training logic, before spending GPU time on Kaggle.
+
+## 11. Run the small subset training on Kaggle — before the full run
+
+```python
+!python src/train_pf.py \
+    --subset_fraction 0.05 --num_epochs 3 --run_name subset_check \
+    --processed_dir /kaggle/working/data/processed \
+    --output_dir /kaggle/working/results
+```
+
+*Why:* catches any bug that only appears across multiple batches/epochs (not just the sanity check's single batch), in minutes instead of hours. Expect it to actually learn something (test accuracy well above the 0.5% random-chance baseline for 200 classes) since it's fine-tuning from an already-good checkpoint, not training from scratch.
+
+## 12. Run the full reproduction (Kaggle)
+
+```python
+!python src/train_pf.py \
+    --subset_fraction 1.0 --num_epochs 30 --run_name full_pf \
+    --processed_dir /kaggle/working/data/processed \
+    --output_dir /kaggle/working/results
+```
+Matches the authors' config: `lr=1e-3`, `T_kld=2`, SGD, 30 epochs. Checkpoints every epoch (`latest.pth`) so an interrupted session can resume by re-running the identical command. Watch live via TensorBoard:
+```python
+%load_ext tensorboard
+%tensorboard --logdir /kaggle/working/results/logs/full_pf
+```
+
+## 13. Bring results back
+
+Download `best.pth` and the TensorBoard logs from `/kaggle/working/results/` via Kaggle's file browser (or **Save Version** to persist the session's outputs), since `/kaggle/working` doesn't survive indefinitely. Reference the checkpoint from your README rather than committing it to git (it's 90MB+, same reasoning as the authors' own checkpoints).
+
+## 14. Log everything as you go
+
+Every new or adapted file gets a row in `PROVENANCE.md` the same day it's written — not reconstructed later:
+
+| File | Status | Source |
 |---|---|---|
-| `resumable_extract.py` | Adapted | AIML-MED/CAPE `datasets.py::_extract()` — added checkpointing every 500 images |
+| `resumable_extract.py` | Adapted | AIML-MED/CAPE `datasets.py::_extract()` — checkpointed, reads folder or tgz |
+| `src/train_pf.py` | Adapted | AIML-MED/CAPE `main.py` + `trainer.py` — subset sampling, per-epoch checkpointing, resume, cross-platform reference-repo path detection |
 | `experiments/01_sanity_check.ipynb` | Written by us | — |
 
 ---
 
 ## If something doesn't match this runbook
 
-Environments drift — different Kaggle re-uploads, path differences, OS quirks. If a step fails in a way not covered above, don't silently work around it and move on. Post the exact command and exact error in the group chat, and once it's resolved, **update this runbook** so the next person doesn't hit the same thing.
+Different Kaggle re-upload showing up in search, a Mac instead of Windows, a Kaggle UI change — whatever it is, don't silently work around it and move on. Post the exact command and exact error in the group chat, and once resolved, add it back into this file so the next person doesn't repeat the same detour.
