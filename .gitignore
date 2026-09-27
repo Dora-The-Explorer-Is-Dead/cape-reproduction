@@ -1,1 +1,24 @@
+# Dataset — never commit
+data/CUB_200_2011.tgz
+data/CUB_200_2011/
+data/archive.zip
+data/processed/
 data/CUB_200_2011/processed/
+
+# Model checkpoints — too large, link externally instead
+checkpoints/
+*.pth
+saved_models/
+
+# Python / venv
+venv/
+__pycache__/
+*.pyc
+
+# Jupyter
+.ipynb_checkpoints/
+experiments/.ipynb_checkpoints/
+
+# OS junk
+.DS_Store
+Thumbs.db
