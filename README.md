@@ -84,6 +84,46 @@ Trained for 30 epochs on full CUB-200-2011, batch size 32, lr=1e-3 (per the
 released config; the paper text states 1e-4), T_kld=2, SGD — matching
 configs/cub/resnet50_PF.py from AIML-MED/CAPE.
 
+## The explanation methods, and how they differ
+
+**CAM** (Zhou et al., 2016) is the original method. It only works on networks
+with a specific architecture — global average pooling immediately followed by
+a single linear classifier layer, exactly what this ResNet-50 setup uses. The
+heatmap is produced directly from that final layer's own weights: each
+spatial location's importance is just a weighted sum of the feature map
+values there, using the classifier's learned weights as the weights.
+
+**Grad-CAM** (Selvaraju et al., 2017) generalizes this idea to work on *any*
+CNN, not just GAP-plus-linear ones, by replacing "the classifier's weights"
+with "the gradient of the target class's score with respect to the last
+convolutional layer." On architectures like this one where CAM already
+applies directly, Grad-CAM ends up mathematically very close to plain CAM —
+which is exactly why, in our results, CAM and Grad-CAM's numbers track each
+other closely rather than diverging.
+
+**Grad-CAM++** (Chattopadhay et al., 2018) refines Grad-CAM's weighting
+scheme using second-order gradient terms instead of a simple average. This
+mainly helps in cases Grad-CAM handles poorly — when a class appears more
+than once in an image, or is only partially visible — by better spreading
+credit across multiple relevant regions instead of collapsing to one.
+
+**CAPE** is not a variant of the CAM family in the same sense — it doesn't
+tweak how the weighting is computed, it changes what the resulting numbers
+*mean*. CAM-family heatmaps only tell you relative importance within one
+image; you can't say a region is worth "12% of the decision," and you can't
+directly compare a heatmap computed for one candidate class against a
+heatmap computed for another. CAPE reformulates the classifier's output so
+that per-region values are on a shared, meaningful scale — they sum exactly
+to the model's actual confidence score, and are comparable across classes.
+
+**μ-CAPE** is a variant of CAPE itself, not a new method from scratch. Plain
+CAPE tends to be very class-discriminative — it sharply highlights only the
+regions that distinguish this specific class from *all* other classes, which
+can mean it suppresses regions that are genuinely part of the object but
+happen to also be relevant to other similar classes. μ-CAPE restores some of
+those "class-mutual" regions, trading some of that sharp discriminability for
+a fuller, more complete picture of what the model is actually looking at.
+
 ## What these metrics actually measure, and why they matter
 
 All six of these come from the paper's Section 4.3, and they exist to answer
