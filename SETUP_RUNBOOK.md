@@ -213,6 +213,8 @@ api.upload_folder(folder_path="/kaggle/working/results/figures", path_in_repo="f
 api.upload_file(path_or_fileobj="/kaggle/working/results/tables/metrics_results.csv", path_in_repo="metrics_results.csv", repo_id="<your-username>/cape-cub-pf")
 ```
 
+The randomness is seeded (--seed 123, the script's default), so it's reproducible — anyone running the same command gets the same 5 images, not a different random draw each time.
+
 ## 16. Recovering from checkpoints — what to run after any interruption
 
 Three scripts in this repo checkpoint their own progress, specifically
