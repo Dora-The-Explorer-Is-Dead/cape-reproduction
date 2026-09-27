@@ -56,6 +56,9 @@ def parse_args():
     p.add_argument('--iou_threshold_frac', type=float, default=0.2,
                     help="mask threshold as a fraction of each map's max value, per the paper's mIoU definition")
     p.add_argument('--seed', type=int, default=123)
+    p.add_argument('--checkpoint_every', type=int, default=100,
+                    help='Save partial results every N images, so a Kaggle session wipe '
+                         'only costs progress since the last checkpoint, not the whole run.')
     return p.parse_args()
 
 
@@ -210,33 +213,63 @@ def main():
     print(f'Evaluating on {n} test images (full test set is {len(test_data)})')
 
     methods = ['CAM', 'Grad-CAM', 'Grad-CAM++', 'CAPE', 'mu-CAPE']
-    running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': []} for m in methods}
-    all_maps_by_method = {m: [] for m in methods}  # for mIoU, need top-2 class maps per image
 
-    for count, idx in enumerate(indices):
-        raw_image = test_data[idx]
-        image_tensor = test_transform(Image.fromarray(raw_image)).to(device)
+    # Resume from a checkpoint if one exists, so a session wipe doesn't cost the whole run.
+    ckpt_path = os.path.join(args.output_dir, 'metrics_checkpoint.pkl')
+    start_count = 0
+    if os.path.isfile(ckpt_path):
+        with open(ckpt_path, 'rb') as f:
+            ckpt = pickle.load(f)
+        running = ckpt['running']
+        all_maps_by_method = ckpt['all_maps_by_method']
+        start_count = ckpt['count']
+        print(f'Resuming from checkpoint: {start_count}/{n} images already done.')
+    else:
+        running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': []} for m in methods}
+        all_maps_by_method = {m: [] for m in methods}
 
-        with torch.no_grad():
-            out = net(image_tensor.unsqueeze(0))
-            probs = out['orig']['outcome'].softmax(dim=1)
-            top2_conf, top2_idx = probs.topk(2, dim=1)
-            pred_class = top2_idx[0, 0].item()
-            second_class = top2_idx[0, 1].item()
+    try:
+        for count, idx in enumerate(indices):
+            if count < start_count:
+                continue
+            raw_image = test_data[idx]
+            image_tensor = test_transform(Image.fromarray(raw_image)).to(device)
 
-        heatmaps_top1 = generate_all_maps(net, image_tensor, pred_class, hooks)
-        per_method, y_c = evaluate_one_image(net, hooks, image_tensor, heatmaps_top1, pred_class)
+            with torch.no_grad():
+                out = net(image_tensor.unsqueeze(0))
+                probs = out['orig']['outcome'].softmax(dim=1)
+                top2_conf, top2_idx = probs.topk(2, dim=1)
+                pred_class = top2_idx[0, 0].item()
+                second_class = top2_idx[0, 1].item()
 
-        heatmaps_top2 = generate_all_maps(net, image_tensor, second_class, hooks)
+            heatmaps_top1 = generate_all_maps(net, image_tensor, pred_class, hooks)
+            per_method, y_c = evaluate_one_image(net, hooks, image_tensor, heatmaps_top1, pred_class)
 
-        for m in methods:
-            for k in ['AD', 'IC', 'ADD', 'ADCC']:
-                running[m][k].append(per_method[m][k])
-            iou = compute_iou(heatmaps_top1[m], heatmaps_top2[m], args.iou_threshold_frac)
-            all_maps_by_method[m].append(iou)
+            heatmaps_top2 = generate_all_maps(net, image_tensor, second_class, hooks)
 
-        if (count + 1) % 20 == 0:
-            print(f'  {count + 1}/{n} images evaluated')
+            for m in methods:
+                for k in ['AD', 'IC', 'ADD', 'ADCC']:
+                    running[m][k].append(per_method[m][k])
+                iou = compute_iou(heatmaps_top1[m], heatmaps_top2[m], args.iou_threshold_frac)
+                all_maps_by_method[m].append(iou)
+
+            if (count + 1) % 20 == 0:
+                print(f'  {count + 1}/{n} images evaluated')
+
+            if (count + 1) % args.checkpoint_every == 0:
+                with open(ckpt_path, 'wb') as f:
+                    pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count + 1}, f)
+                print(f'  -> checkpoint saved at {count + 1} images')
+
+    except (KeyboardInterrupt, Exception) as e:
+        with open(ckpt_path, 'wb') as f:
+            pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count}, f)
+        print(f'\nInterrupted/error at image {count}: {e}')
+        print('Checkpoint saved — re-run the identical command to resume from here.')
+        raise
+
+    if os.path.isfile(ckpt_path):
+        os.remove(ckpt_path)
 
     results = {}
     for m in methods:

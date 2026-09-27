@@ -133,21 +133,26 @@ def generate_all_maps(net, image_tensor, target_class, hooks):
 
     outputs = net(image_tensor)
 
-    # CAM: model.py's own per-pixel activation map for the orig head, at the target class
-    cam_map = outputs['orig']['cls_map'][:, target_class:target_class + 1]
+    # CAM: confirmed against AIML-MED/CAPE's own generate_cam_maps.py — they use
+    # F.relu(outputs['orig']['weighted_contribution']), not cls_map directly. orig's
+    # weighted_contribution is cls_map scaled by a uniform constant (1/H*W), so the
+    # only real difference is the ReLU, applied here before normalizing.
+    cam_map = F.relu(outputs['orig']['weighted_contribution'][:, target_class:target_class + 1])
     cam_map = normalize_map(cam_map)
 
-    # CAPE: use logcampe_clip0, not weighted_contribution. weighted_contribution is
-    # jointly softmax-normalized across all 200 classes AND all spatial positions at
-    # once (39,200-way normalization), so a single class's 14x14 slice is extremely
-    # peaky/near-zero almost everywhere after that global squashing — min-max
-    # normalizing it produces an almost-binary mask covering a tiny image region,
-    # which caused pathological AD/IC/mIoU values in initial testing (AD ~68% vs the
-    # paper's ~22%). logcampe_clip0 is the log-domain, non-fully-squashed version of
-    # the same information (the name reads as "log CAM-CAPE") and is a much more
-    # plausible match for what the paper actually visualizes as the CAPE heatmap.
-    cape_map = outputs['cape']['logcampe_clip0'][:, target_class:target_class + 1]
+    # CAPE: confirmed against generate_cam_maps.py — plain CAPE uses
+    # weighted_contribution directly, NOT logcampe_clip0. An earlier version of this
+    # script swapped to logcampe_clip0 after weighted_contribution produced very
+    # peaky, near-binary-looking maps — but that peakiness is genuine CAPE behavior
+    # (the paper's own claim is that CAPE is sparse/class-discriminative), and
+    # logcampe_clip0 is actually the quantity their code uses for mu-CAPE, not CAPE.
+    cape_map = outputs['cape']['weighted_contribution'][:, target_class:target_class + 1]
     cape_map = normalize_map(cape_map)
+
+    # mu-CAPE: per generate_cam_maps.py, this is logcampe_clip0 — a smoother variant
+    # that restores some of the class-mutual regions plain CAPE suppresses.
+    mu_cape_map = outputs['cape']['logcampe_clip0'][:, target_class:target_class + 1]
+    mu_cape_map = normalize_map(mu_cape_map)
 
     # Grad-CAM / Grad-CAM++: need a fresh forward pass with grad enabled,
     # since the one above wasn't tracked for backprop into the backbone.
@@ -165,6 +170,7 @@ def generate_all_maps(net, image_tensor, target_class, hooks):
         'Grad-CAM': gc_map,
         'Grad-CAM++': gcpp_map,
         'CAPE': cape_map,
+        'mu-CAPE': mu_cape_map,
     }
 
 
