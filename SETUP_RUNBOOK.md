@@ -133,11 +133,65 @@ Matches the authors' config: `lr=1e-3`, `T_kld=2`, SGD, 30 epochs. Checkpoints e
 %tensorboard --logdir /kaggle/working/results/logs/full_pf
 ```
 
-## 13. Bring results back
+## 13. Get results off Kaggle immediately after training finishes
+
+Kaggle's Output tab is unreliable for larger files — it can show stale or
+incomplete listings even when the files are genuinely fine on disk. Don't
+trust it. Always verify directly against the live session first:
+
+```python
+import os
+path = '/kaggle/working/results/checkpoints/full_pf/best.pth'
+print(os.path.exists(path), os.path.getsize(path) if os.path.exists(path) else "N/A")
+```
+
+Kaggle's `FileLink` download and the Output tab's download button both
+regularly fail (404s) for files this size (~97MB). Don't fight them — upload
+straight from Kaggle to Hugging Face instead, server to server, bypassing
+your own browser/connection entirely:
+
+```python
+!pip install huggingface_hub
+from huggingface_hub import login, HfApi, create_repo
+
+login(token="your-hf-write-token")   # get one at huggingface.co → Settings → Access Tokens
+create_repo("your-username/cape-cub-pf", exist_ok=True)
+
+api = HfApi()
+api.upload_file(
+    path_or_fileobj="/kaggle/working/results/checkpoints/full_pf/best.pth",
+    path_in_repo="best.pth",
+    repo_id="your-username/cape-cub-pf",
+)
+api.upload_folder(
+    folder_path="/kaggle/working/results/logs/full_pf",
+    path_in_repo="logs/full_pf",
+    repo_id="your-username/cape-cub-pf",
+)
+```
+
+`best.pth` is the checkpoint that matters — whichever epoch scored highest on
+test accuracy, used for all downstream heatmap generation and metrics.
+`latest.pth` (the final epoch) is optional, kept only as a just-in-case
+backup. Once uploaded, add the Hugging Face repo link to `README.md` and
+commit that change, same as any other file:
+
+```bash
+cd ~/cape-reproduction
+git pull
+git add README.md
+git commit -m "Add checkpoint link"
+git push
+```
+
+Do this immediately after training finishes, in the same session — don't
+close the Kaggle tab first and try to recover the files later.
+
+## 14. Bring results back
 
 Download `best.pth` and the TensorBoard logs from `/kaggle/working/results/` via Kaggle's file browser (or **Save Version** to persist the session's outputs), since `/kaggle/working` doesn't survive indefinitely. Reference the checkpoint from your README rather than committing it to git (it's 90MB+, same reasoning as the authors' own checkpoints).
 
-## 14. Log everything as you go
+## 15. Log everything as you go
 
 Every new or adapted file gets a row in `PROVENANCE.md` the same day it's written — not reconstructed later:
 
