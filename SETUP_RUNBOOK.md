@@ -60,9 +60,11 @@ You'll see this word a lot. A `.tgz` (`.tar.gz`) is a folder of files bundled in
 1. Go to `kaggle.com` → **Code** → **New Notebook**
 2. Right sidebar → **+ Add Input** → search "CUB 200 2011" → add a dataset that includes `images.txt`, `train_test_split.txt`, and an `images/` folder (preview it before adding to check)
 3. It mounts pre-extracted at `/kaggle/input/<dataset-name>/` — no download or unzip needed at all
-4. **Check the exact path**, since some uploads nest an extra folder:
+4. This is the exact link we're using: [CUB_200_2011](https://www.kaggle.com/datasets/wenewone/cub2002011)
 ```python
-!ls /kaggle/input/<dataset-name>
+!ls /kaggle/input # this will tell you what folder is inside it which you will replace <dataset-name> with in the line below.
+!ls /kaggle/input/<dataset-name> # keep going down the directories till you reach CUB_200_2011 which will have another CUB_200_2011 in it as the line below demonstrates
+# execute this third line once your directory looks like this:
 !ls /kaggle/input/<dataset-name>/CUB_200_2011/CUB_200_2011   # if double-nested
 ```
 You're looking for `images.txt`, `images/`, `train_test_split.txt`, `classes.txt` — note however many folders deep they actually are, you'll pass that exact path as `--data_root` in step 6.
