@@ -22,4 +22,6 @@ experiments/.ipynb_checkpoints/
 # OS junk
 .DS_Store
 Thumbs.db
-results/
+# Ignore large/regenerable result outputs, but keep small tables and figures trackable
+results/checkpoints/
+results/logs/
