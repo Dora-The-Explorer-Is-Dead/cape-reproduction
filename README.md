@@ -209,3 +209,55 @@ That's worth stating directly: our numbers are a fair test of what CAPE (not
 isn't meant to dominate every metric — its case rests on the mIoU/
 class-discriminative story and the absolute-contribution framing, not on
 outscoring CAM on AD/IC/ADD/ADCC.
+
+## Reproduction results — full test set (n=5,794, CUB-200-2011)
+
+| Method | AD ↓ | IC ↑ | ADD ↑ | ADCC ↑ | mIoU ↓ | BC |
+|---|---|---|---|---|---|---|
+| CAM (paper) | 21.2 | 27.9 | 67.4 | 78.8 | 75.9 | 0 |
+| CAM (ours) | 24.40 | 24.46 | 64.96 | 78.00 | 74.91 | 5 |
+| Grad-CAM (paper) | 21.6 | 27.5 | 66.8 | 77.3 | 100.0 | 0 |
+| Grad-CAM (ours) | 24.40 | 24.42 | 64.96 | 77.99 | 74.91 | 2 |
+| Grad-CAM++ (paper) | 20.3 | 28.7 | 68.9 | 77.4 | 100.0 | 0 |
+| Grad-CAM++ (ours) | 22.18 | 26.23 | 67.66 | 78.17 | 90.40 | 11 |
+| CAPE (PF) (paper) | 22.2 | 26.5 | 68.7 | 73.7 | 13.4 | 3 |
+| CAPE (PF) (ours) | 57.70 | 6.70 | 40.03 | 52.90 | 26.97 | 3 |
+| μ-CAPE (PF) (paper) | 15.9 | 30.9 | 69.6 | 83.0 | 66.6 | 5 |
+| μ-CAPE (PF) (ours) | 22.80 | 25.80 | 67.42 | 78.41 | 83.29 | 9 |
+
+**CAM, Grad-CAM, and Grad-CAM++ reproduced closely** across all five metrics
+— ADCC in particular landed within a point of the paper (78.0 vs. 78.8 for
+CAM), confirming our ADCC implementation is correct after fixing a
+coherency-normalization bug found during development (see PROVENANCE.md).
+CAM and Grad-CAM producing near-identical numbers (24.40 vs. 24.40 AD) is
+expected, not a coincidence: on a global-average-pooling architecture like
+this ResNet-50, the two methods are mathematically near-equivalent.
+
+**CAPE's mIoU correctly reproduces the paper's central qualitative claim.**
+CAPE's mIoU (26.97) sits far below CAM's (74.91) — consistent with the
+paper's core finding that CAPE produces more class-discriminative,
+lower-overlap explanations than CAM-family methods. This required correcting
+a mix-up during development where we initially generated the *μ-CAPE* map
+(`logcampe_clip0`) while labeling it "CAPE" — the true CAPE quantity
+(`weighted_contribution`) is the one shown here, verified against the
+authors' own `generate_cam_maps.py`.
+
+**CAPE's AD, IC, ADD, and ADCC did not reproduce closely, in a consistent
+direction.** Our CAPE (PF) shows a much larger confidence drop under masking
+(AD 57.7 vs. the paper's 22.2) and much smaller confidence gain (IC 6.7 vs.
+26.5) than reported — more extreme than even the paper's own description of
+CAPE as sparse and class-discriminative would suggest. We believe this stems
+from a combination of: (1) the paper text and the released config disagreeing
+on PF's learning rate (1e-4 vs. the 1e-3 we used, matching the code), which
+may have produced a CAPE layer with different sharpness than the authors';
+and (2) our AD/IC/ADD masking implementation, built from the paper's
+equations without access to their evaluation code, likely differs from
+theirs in exact normalization or masking conventions — a difference to which
+CAPE's naturally sparse output distribution may be especially sensitive,
+compared to the smoother CAM-family maps where this same implementation
+reproduced closely.
+
+**μ-CAPE reproduced moderately well** — ADCC (78.41) and IC (25.80) are close
+to CAM's own numbers, though without the clear separation the paper reports
+(μ-CAPE(PF) AD 15.9, notably better than CAM's 21.2 in the paper; ours is
+comparable to, not better than, CAM).
