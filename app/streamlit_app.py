@@ -85,7 +85,7 @@ def load_model():
     }
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     net = Net(config).to(device)
-    state = torch.load(checkpoint_path, map_location=device)
+    state = torch.load(checkpoint_path, map_location=device, weights_only=False)
     if isinstance(state, dict) and 'model_state_dict' in state:
         state = state['model_state_dict']
     net.load_state_dict(state)

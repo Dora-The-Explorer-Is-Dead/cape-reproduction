@@ -68,7 +68,7 @@ def build_model(args, device):
     # NOTE: train_pf.py's checkpoint dict wraps the model under 'model_state_dict'
     # for the resumable 'latest.pth' format, but 'best.pth' is saved as a bare
     # state_dict (see train_pf.py: torch.save(net.state_dict(), ...best.pth)).
-    state = torch.load(args.checkpoint, map_location=device)
+    state = torch.load(args.checkpoint, map_location=device, weights_only=False)
     if isinstance(state, dict) and 'model_state_dict' in state:
         state = state['model_state_dict']
     net.load_state_dict(state)

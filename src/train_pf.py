@@ -149,7 +149,10 @@ def build_model(args, device):
     }
     net = Net(config).to(device)
 
-    state_dict = torch.load(args.reload_path, map_location=device)
+    # weights_only=False: PyTorch 2.6+ defaults to True, which rejects this
+    # checkpoint format. Safe here since it's AIML-MED/CAPE's own released
+    # checkpoint, not an untrusted file.
+    state_dict = torch.load(args.reload_path, map_location=device, weights_only=False)
     net.load_state_dict(state_dict)
 
     # PF: freeze backbone + vanilla classifier; only 'cape' head + temperature params train
@@ -255,7 +258,7 @@ def main():
     start_epoch = 0
     latest_ckpt = os.path.join(ckpt_dir, 'latest.pth')
     if os.path.isfile(latest_ckpt):
-        ckpt = torch.load(latest_ckpt, map_location=device)
+        ckpt = torch.load(latest_ckpt, map_location=device, weights_only=False)
         net.load_state_dict(ckpt['model_state_dict'])
         optimizer.load_state_dict(ckpt['optimizer_state_dict'])
         start_epoch = ckpt['epoch'] + 1
