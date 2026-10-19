@@ -20,6 +20,7 @@ Usage:
 
 import os
 import sys
+import json
 import pickle
 import argparse
 
@@ -56,17 +57,43 @@ def parse_args():
     p.add_argument('--iou_threshold_frac', type=float, default=0.2,
                     help="mask threshold as a fraction of each map's max value, per the paper's mIoU definition")
     p.add_argument('--seed', type=int, default=123)
+    p.add_argument('--cape_scoring_head', choices=['orig', 'cape'], default='orig',
+                    help="Which classifier head scores the masked images (and picks the predicted/"
+                         "top-2 classes) for the CAPE and mu-CAPE rows. 'orig' = the vanilla head, "
+                         "used for every method in all earlier runs (default, keeps old results "
+                         "comparable). 'cape' = CAPE's own prediction p_hat, which is the quantity "
+                         "CAPE's explanation actually decomposes. CAM/Grad-CAM/Grad-CAM++ are ALWAYS "
+                         "scored with the vanilla head, so they act as a control.")
     p.add_argument('--checkpoint_every', type=int, default=100,
                     help='Save partial results every N images, so a Kaggle session wipe '
                          'only costs progress since the last checkpoint, not the whole run.')
     return p.parse_args()
 
 
-def get_confidence(net, image_tensor, target_class):
+def get_confidence(net, image_tensor, target_class, head='orig'):
+    """Probability of target_class from the chosen head: 'orig' = softmax of the vanilla
+    classifier, 'cape' = CAPE's own p_hat (already a probability distribution)."""
     with torch.no_grad():
         out = net(image_tensor.unsqueeze(0))
+        if head == 'cape':
+            return out['cape']['outcome'][0, target_class].item()
         probs = out['orig']['outcome'].softmax(dim=1)
         return probs[0, target_class].item()
+
+
+CAPE_FAMILY = ('CAPE', 'mu-CAPE')
+
+
+def select_classes_and_heads(methods, top2_orig, top2_cape, scoring_head):
+    """For each method, which class is 'predicted', which is 'second', and which head scores it.
+    Only the CAPE-family methods can switch to the CAPE head; the CAM family never does."""
+    class_for, second_for, head_for = {}, {}, {}
+    for m in methods:
+        use_cape = scoring_head == 'cape' and m in CAPE_FAMILY
+        src = top2_cape if use_cape else top2_orig
+        class_for[m], second_for[m] = src[0], src[1]
+        head_for[m] = 'cape' if use_cape else 'orig'
+    return class_for, second_for, head_for
 
 
 def apply_mask(image_tensor, heatmap_2d, keep):
@@ -166,17 +193,22 @@ def borda_count(results):
     return bc
 
 
-def evaluate_one_image(net, hooks, image_tensor, heatmaps, target_class):
-    """Computes AD, IC, ADD, coherency, complexity, ADCC for every method's map on one image."""
-    y_c = get_confidence(net, image_tensor, target_class)
+def evaluate_one_image(net, hooks, image_tensor, heatmaps, class_for, head_for):
+    """Computes AD, IC, ADD, coherency, complexity, ADCC (and coverage) for every method's map
+    on one image. `heatmaps[m]` is method m's map for class_for[m], scored with head_for[m]."""
     per_method = {}
 
     for method, e_c in heatmaps.items():
+        target_class = class_for[method]
+        head = head_for[method]
+
+        y_c = get_confidence(net, image_tensor, target_class, head)
+
         keep_masked = apply_mask(image_tensor, e_c, keep=True)
-        o_c = get_confidence(net, keep_masked, target_class)
+        o_c = get_confidence(net, keep_masked, target_class, head)
 
         del_masked = apply_mask(image_tensor, e_c, keep=False)
-        d_c = get_confidence(net, del_masked, target_class)
+        d_c = get_confidence(net, del_masked, target_class, head)
 
         # Recompute the explanation map on the keep-masked image, for coherency.
         # Re-uses the same heatmap-generation path so it's method-consistent.
@@ -190,9 +222,10 @@ def evaluate_one_image(net, hooks, image_tensor, heatmaps, target_class):
         com = complexity(e_c)
         adcc = adcc_score(coh, com, ad)
 
-        per_method[method] = {'AD': ad, 'IC': ic, 'ADD': add, 'ADCC': adcc}
+        # COV: mean of the [0,1] map = the average fraction of each pixel the soft mask keeps.
+        per_method[method] = {'AD': ad, 'IC': ic, 'ADD': add, 'ADCC': adcc, 'COV': float(e_c.mean())}
 
-    return per_method, y_c
+    return per_method
 
 
 def main():
@@ -217,15 +250,22 @@ def main():
     # Resume from a checkpoint if one exists, so a session wipe doesn't cost the whole run.
     ckpt_path = os.path.join(args.output_dir, 'metrics_checkpoint.pkl')
     start_count = 0
+    run_config = {'checkpoint': args.checkpoint, 'cape_scoring_head': args.cape_scoring_head,
+                  'num_images': n, 'seed': args.seed, 'iou_threshold_frac': args.iou_threshold_frac}
     if os.path.isfile(ckpt_path):
         with open(ckpt_path, 'rb') as f:
             ckpt = pickle.load(f)
+        if ckpt.get('config') != run_config:
+            raise RuntimeError(
+                f'Found a metrics checkpoint at {ckpt_path} from a different run configuration '
+                f'(saved: {ckpt.get("config")}, current: {run_config}). Resuming would silently mix '
+                f'two configurations. Use a different --output_dir, or delete that checkpoint file.')
         running = ckpt['running']
         all_maps_by_method = ckpt['all_maps_by_method']
         start_count = ckpt['count']
         print(f'Resuming from checkpoint: {start_count}/{n} images already done.')
     else:
-        running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': []} for m in methods}
+        running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': [], 'COV': []} for m in methods}
         all_maps_by_method = {m: [] for m in methods}
 
     try:
@@ -237,18 +277,27 @@ def main():
 
             with torch.no_grad():
                 out = net(image_tensor.unsqueeze(0))
-                probs = out['orig']['outcome'].softmax(dim=1)
-                top2_conf, top2_idx = probs.topk(2, dim=1)
-                pred_class = top2_idx[0, 0].item()
-                second_class = top2_idx[0, 1].item()
+                top2_orig = out['orig']['outcome'].softmax(dim=1).topk(2, dim=1)[1][0].tolist()
+                top2_cape = out['cape']['outcome'].topk(2, dim=1)[1][0].tolist()
 
-            heatmaps_top1 = generate_all_maps(net, image_tensor, pred_class, hooks)
-            per_method, y_c = evaluate_one_image(net, hooks, image_tensor, heatmaps_top1, pred_class)
+            class_for, second_for, head_for = select_classes_and_heads(
+                methods, top2_orig, top2_cape, args.cape_scoring_head)
 
-            heatmaps_top2 = generate_all_maps(net, image_tensor, second_class, hooks)
+            # Heatmaps are generated once per distinct class, then each method takes its own.
+            maps_cache = {}
+
+            def maps_for(cls):
+                if cls not in maps_cache:
+                    maps_cache[cls] = generate_all_maps(net, image_tensor, cls, hooks)
+                return maps_cache[cls]
+
+            heatmaps_top1 = {m: maps_for(class_for[m])[m] for m in methods}
+            heatmaps_top2 = {m: maps_for(second_for[m])[m] for m in methods}
+
+            per_method = evaluate_one_image(net, hooks, image_tensor, heatmaps_top1, class_for, head_for)
 
             for m in methods:
-                for k in ['AD', 'IC', 'ADD', 'ADCC']:
+                for k in ['AD', 'IC', 'ADD', 'ADCC', 'COV']:
                     running[m][k].append(per_method[m][k])
                 iou = compute_iou(heatmaps_top1[m], heatmaps_top2[m], args.iou_threshold_frac)
                 all_maps_by_method[m].append(iou)
@@ -258,12 +307,12 @@ def main():
 
             if (count + 1) % args.checkpoint_every == 0:
                 with open(ckpt_path, 'wb') as f:
-                    pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count + 1}, f)
+                    pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count + 1, 'config': run_config}, f)
                 print(f'  -> checkpoint saved at {count + 1} images')
 
     except (KeyboardInterrupt, Exception) as e:
         with open(ckpt_path, 'wb') as f:
-            pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count}, f)
+            pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count, 'config': run_config}, f)
         print(f'\nInterrupted/error at image {count}: {e}')
         print('Checkpoint saved — re-run the identical command to resume from here.')
         raise
@@ -279,6 +328,7 @@ def main():
             'ADD': float(np.mean(running[m]['ADD'])) * 100,
             'ADCC': float(np.mean(running[m]['ADCC'])) * 100,
             'mIoU': float(np.mean(all_maps_by_method[m])) * 100,
+            'COV': float(np.mean(running[m]['COV'])) * 100,
         }
 
     bc = borda_count(results)
@@ -286,17 +336,20 @@ def main():
         results[m]['BC'] = bc[m]
 
     print('\n--- Results (n={} images) ---'.format(n))
-    print(f'{"Method":12s} {"AD":>6s} {"IC":>6s} {"ADD":>6s} {"ADCC":>6s} {"mIoU":>6s} {"BC":>4s}')
+    print(f'(CAPE/mu-CAPE scored with the {args.cape_scoring_head!r} head; CAM family always vanilla)')
+    print(f'{"Method":12s} {"AD":>6s} {"IC":>6s} {"ADD":>6s} {"ADCC":>6s} {"mIoU":>6s} {"BC":>4s} {"COV":>6s}')
     for m in methods:
         r = results[m]
-        print(f'{m:12s} {r["AD"]:6.1f} {r["IC"]:6.1f} {r["ADD"]:6.1f} {r["ADCC"]:6.1f} {r["mIoU"]:6.1f} {r["BC"]:4d}')
+        print(f'{m:12s} {r["AD"]:6.1f} {r["IC"]:6.1f} {r["ADD"]:6.1f} {r["ADCC"]:6.1f} {r["mIoU"]:6.1f} {r["BC"]:4d} {r["COV"]:6.1f}')
 
     out_path = os.path.join(args.output_dir, 'metrics_results.csv')
     with open(out_path, 'w') as f:
-        f.write('Method,AD,IC,ADD,ADCC,mIoU,BC\n')
+        f.write('Method,AD,IC,ADD,ADCC,mIoU,BC,COV\n')
         for m in methods:
             r = results[m]
-            f.write(f'{m},{r["AD"]:.2f},{r["IC"]:.2f},{r["ADD"]:.2f},{r["ADCC"]:.2f},{r["mIoU"]:.2f},{r["BC"]}\n')
+            f.write(f'{m},{r["AD"]:.2f},{r["IC"]:.2f},{r["ADD"]:.2f},{r["ADCC"]:.2f},{r["mIoU"]:.2f},{r["BC"]},{r["COV"]:.2f}\n')
+    with open(os.path.join(args.output_dir, 'run_config.json'), 'w') as f:
+        json.dump(run_config, f, indent=2)
     print(f'\nSaved to {out_path}')
 
 
