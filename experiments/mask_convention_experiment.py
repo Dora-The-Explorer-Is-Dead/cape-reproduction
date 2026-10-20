@@ -47,8 +47,12 @@ import torch
 import torch.nn.functional as F
 from PIL import Image
 
-sys.path.insert(0, os.path.dirname(os.path.abspath(__file__)))
-from explain import build_model, GradCAMHooks, generate_all_maps  # noqa: E402  (also puts the reference repo on sys.path)
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+sys.path.insert(0, REPO_ROOT)
+
+from explain import build_model, GradCAMHooks, generate_all_maps  # noqa: E402
 from configs import transforms as cape_transforms  # noqa: E402
 
 METHODS = ['CAM', 'Grad-CAM', 'Grad-CAM++', 'CAPE', 'mu-CAPE']
