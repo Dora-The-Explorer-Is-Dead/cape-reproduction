@@ -164,7 +164,7 @@ $$
 
 The reported AD is the mean of this quantity across the evaluated images, multiplied by 100.
 
-Here, \(x\odot M\) denotes the image after applying the mask. For soft masks, pixel values are multiplied by mask values between zero and one. For binary masks, pixels are either retained or set to zero in the normalized input representation.
+Here, $x \odot M$ denotes the image after applying the mask. For soft masks, pixel values are multiplied by mask values between zero and one. For binary masks, pixels are either retained or set to zero in the normalized input representation.
 
 **Lower AD is considered better under this metric:** the model retains more of its original confidence after the mask is applied.
 
