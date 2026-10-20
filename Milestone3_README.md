@@ -1,194 +1,172 @@
-# Milestone 3: CAPE Reproduction Analysis, Metric Audits, and Masking Sensitivity
+# CAPE reproduction — Milestones 3 & 4: the evaluation fix and the mask-convention experiment
 
-This repository documents the reproduction, code-level debugging, and benchmarking of the CVPR 2024 paper **CAPE** (*Class-Aware Positional Explanations*) on the **CUB-200-2011** dataset using a **ResNet-50** backbone.
+Paper: Chowdhury et al., *CAPE: CAM as a Probabilistic Ensemble for Enhanced DNN Interpretation*, CVPR 2024.
+Setting: ResNet-50, CUB-200-2011, post-fitted (PF) CAPE head, 14x14 explanation maps.
 
----
-
-## 1. Initial Reproduction Results vs. Paper Table 1
-
-We evaluated visual explanation faithfulness across standard CVPR benchmark metrics:
-* **AD ↓** (Average Drop, lower = more faithful)
-* **IC ↑** (Increase in Confidence, higher = more faithful)
-* **ADD ↑** (Average Drop in Deletion, higher = more faithful)
-* **ADCC ↑** (Average Drop in Co-occurrence, higher = more faithful)
-* **mIoU ↓** (Mean Intersection over Union / Pointing Game, lower = better localization)
-* **BC** (Best Class count across test instances)
-
-Evaluating our initial reproduction pipeline against the published Table 1 numbers yielded the following baseline comparison:
-
-| Method | Source | AD ↓ | IC ↑ | ADD ↑ | ADCC ↑ | mIoU ↓ | BC |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: | :---: |
-| **CAM** | Paper | 21.20 | 27.90 | 67.40 | 78.80 | 75.90 | 0 |
-| | **Ours (Old)** | **24.40** | **24.46** | **64.96** | **78.00** | **74.91** | **5** |
-| **Grad-CAM** | Paper | 21.60 | 27.50 | 66.80 | 77.30 | 100.00 | 0 |
-| | **Ours (Old)** | **24.40** | **24.42** | **64.96** | **77.99** | **74.91** | **2** |
-| **Grad-CAM++** | Paper | 20.30 | 28.70 | 68.90 | 77.40 | 100.00 | 0 |
-| | **Ours (Old)** | **22.18** | **26.23** | **67.66** | **78.17** | **90.40** | **11** |
-| **CAPE (PF)** | Paper | 22.20 | 26.50 | 68.70 | 73.70 | 13.40 | 3 |
-| | **Ours (Old)** | **57.70** | **6.70** | **40.03** | **52.90** | **26.97** | **3** |
-| **$\mu$-CAPE (PF)** | Paper | 15.90 | 30.90 | 69.60 | 83.00 | 66.60 | 5 |
-| | **Ours (Old)** | **22.80** | **25.80** | **67.42** | **78.41** | **83.29** | **9** |
+> Items marked **[TODO]** need a number or confirmation from our own runs before submission.
 
 ---
 
-## 2. What the Discrepancy Implied
+## 1. Summary
 
-1. **Backbone and Baseline Stability:**  
-   CAM, Grad-CAM, and Grad-CAM++ were reproduced closely (all within 1–3% of Table 1 targets), confirming the pre-trained weights and backbone feature extraction pipeline were functioning as expected.
-2. **Catastrophic Drop on CAPE (PF):**  
-   Standard CAPE collapsed across all confidence metrics: AD rose from $22.20\%$ to $57.70\%$ (+35.5% error), IC fell from $26.50\%$ to $6.70\%$, and ADD dropped from $68.70\%$ to $40.03\%$.
-3. **$\mu$-CAPE Lag:**  
-   While $\mu$-CAPE ranked ahead of standard CAPE, its AD remained higher than reported ($22.80\%$ vs. $15.90\%$), and its IC lagged ($25.80\%$ vs. $30.90\%$).
-4. **Localization of the Error:**  
-   Because the CAM family reproduced without issue, model convergence and checkpoint loading were ruled out as the primary failure mode. The failure was isolated to how post-fitted explanation masks were evaluated, normalized, and scored inside `metrics.py`.
+1. Our first full evaluation was wrong. It scored CAPE and mu-CAPE maps with the *vanilla* head's confidence. Scoring them with the *CAPE* head, which is the head they explain, moved CAPE's Average Drop (AD) from 57.7 to 33.6 and mu-CAPE's from 22.8 to 11.2. The CAM-family rows and every mIoU value did not change.
+2. The learning-rate explanation we gave for the original gap is retracted. The lr = 1e-4 rerun went through the same faulty evaluator, so it is inconclusive.
+3. With the fix, some of the paper's claims hold in direction and some do not. Section 5 gives the claim-by-claim verdicts.
+4. The experiment asks how much AD rankings depend on the mask convention. AD is mostly a function of how much of the image a mask keeps. At matched kept area, CAPE sits on roughly the same AD curve as the CAM family.
+5. The paper's CAPE-vs-CAM AD comparison pairs each method with a different head. The same CAM maps score 24.3 on the vanilla head and 13.0 on the CAPE head, so that pairing mixes a head effect with a method effect.
 
 ---
 
-## 3. Errors Made and Fixes Implemented in `metrics.py`
+## 2. The fix
 
-Tracing the failure through `metrics.py` uncovered two operational bugs in the perturbation and scoring pipeline:
+**What was wrong.** `metrics.py` read `out['orig']['outcome'].softmax(...)` for every method. CAPE and mu-CAPE explain the CAPE head's output, so their confidence should come from `out['cape']['outcome']`, which is already a probability and must not be softmaxed again.
 
-### Error 1: Head Routing Mismatch During Perturbation
-* **Cause:** During masked image perturbation ($x \odot M$), the script passed masked images for CAPE through the vanilla classifier head (`out["orig"]["outcome"]`) instead of the trained post-fitted linear projection (`out["cape"]["outcome"]`).
-* **Consequence:** CAPE's explanation maps are explicitly tailored to the post-fitted feature space. Scoring them against the vanilla head created an out-of-distribution mismatch, triggering massive confidence drops that artificially inflated AD to $57.70\%$ and suppressed IC to $6.70\%$.
-* **Fix:** `metrics.py` was updated to route masked image forward passes directly through `out["cape"]["outcome"]` whenever evaluating post-fitted methods.
+**What changed.** The rewritten `metrics.py` picks the head per method: the CAPE head for CAPE and mu-CAPE, and the vanilla head for CAM, Grad-CAM and Grad-CAM++. Nothing else substantive changed.
 
-### Error 2: Mask Clamping and Class-Probability Alignment
-* **Cause:** Unbounded mask tensors allowed negative artifacts to pass into continuous element-wise multiplication ($x \odot M$). Additionally, confidence drop calculations ($\max(0, P_{\text{clean}} - P_{\text{masked}})$) did not consistently lock to the top-1 predicted class index of the clean image across batch dimensions.
-* **Fix:** Enforced per-map min-max normalization and strict $[0, 1]$ bounding prior to perturbation, while locking target-class indexing across the tensor forward pass:
+**Why we believe the fix is the cause and not just a lucky change:**
 
-```python
-# metrics.py patch
-norm_mask = (mask - mask.min()) / (mask.max() - mask.min() + 1e-8)
-clamped_mask = torch.clamp(norm_mask, 0.0, 1.0)
-masked_input = image * clamped_mask
-```
+- CAM, Grad-CAM and Grad-CAM++ rows are identical before and after (for example CAM AD 24.40 both times).
+- mIoU is identical for all five methods, as expected, because it depends only on the maps.
+- Only the CAPE and mu-CAPE rows moved.
+- The mask-convention experiment (Section 4) contains an independent regression check. Under the soft mask, the vanilla-head CAPE AD is 57.3 (old evaluator: 57.7) and the CAPE-head AD is 34.1 (corrected evaluator: 33.55).
+- The paper says the CAPE explanation should not be used to explain the vanilla classifier (Discussion, "CAPE explains itself"). Scoring CAPE maps with the vanilla head went against that.
+
+This is the third error we caught in this project. The first two were mislabeling mu-CAPE's map as CAPE's, and a coherency-normalization bug in ADCC.
 
 ---
 
-## 4. Corrected Reproduction Results
+## 3. What the earlier results implied, and why we retract it
 
-Re-running the evaluation on the identical test split with the patched `metrics.py` yielded the following updated metrics:
+The first evaluation showed CAPE far less faithful than the paper (AD 57.7 vs 22.2, IC 6.7 vs 26.5). We blamed the mismatch between the paper's PF learning rate (1e-4) and the released config (1e-3), and a rerun at 1e-4 appeared to "rule out" the learning rate while pointing at the masking convention.
+
+Both parts of that story were wrong:
+
+- The 1e-4 rerun was scored with the faulty evaluator. All it showed was that the learning rate had no detectable effect *under that evaluation*.
+- The "masking convention" suspicion was in the right area but vague. The real cause was a specific bug (wrong head).
+- **[TODO]** If the lr = 1e-4 checkpoint still exists, re-evaluate it with the corrected `metrics.py` and report the numbers here. That turns the question into a real result.
+
+---
+
+## 4. Corrected results
+
+### 4.1 Full test set (n = 5,794), corrected evaluator
 
 | Method | AD ↓ | IC ↑ | ADD ↑ | ADCC ↑ | mIoU ↓ | BC |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **CAM** | 24.40 | 24.46 | 64.96 | 78.00 | 74.91 | 4 |
-| **Grad-CAM** | 24.40 | 24.42 | 64.96 | 77.99 | 74.91 | 2 |
-| **Grad-CAM++** | 22.18 | 26.23 | 67.66 | 78.17 | 90.40 | 8 |
-| **CAPE (PF)** | **33.55** | **25.61** | **52.04** | **74.66** | **26.97** | **4** |
-| **$\mu$-CAPE (PF)** | **11.24** | **46.96** | **71.48** | **85.74** | **83.29** | **12** |
+|---|---|---|---|---|---|---|
+| CAM (paper) | 21.2 | 27.9 | 67.4 | 78.8 | 75.9 | n/a |
+| CAM (ours) | 24.40 | 24.46 | 64.96 | 78.00 | 74.91 | 4 |
+| Grad-CAM (ours) | 24.40 | 24.42 | 64.96 | 77.99 | 74.91 | 2 |
+| Grad-CAM++ (ours) | 22.18 | 26.23 | 67.66 | 78.17 | 90.40 | 8 |
+| CAPE PF (paper) | 22.2 | 26.5 | 68.7 | 73.7 | 13.4 | 3 |
+| CAPE PF, first evaluation | 57.70 | 6.70 | 40.03 | 52.90 | 26.97 | n/a |
+| CAPE PF (ours, corrected) | 33.55 | 25.61 | 52.04 | 74.66 | 26.97 | 4 |
+| mu-CAPE PF (paper) | 15.9 | 30.9 | 69.6 | 83.0 | 66.6 | 5 |
+| mu-CAPE PF, first evaluation | 22.80 | 25.80 | 67.42 | 78.41 | 83.29 | n/a |
+| mu-CAPE PF (ours, corrected) | 11.24 | 46.96 | 71.48 | 85.74 | 83.29 | 12 |
 
-### Shift from Old to New Metrics
+How to read this:
 
+- **CAM family.** AD, IC, ADD and ADCC are within a few points of the paper. CAM and Grad-CAM matching each other is a correctness check on our Grad-CAM, because on a global-average-pooling head the two are mathematically the same up to scale. The paper lists mIoU 100.0 for Grad-CAM and Grad-CAM++, which class-specific gradients cannot produce for two different classes. We got 74.9 and 90.4. We do not know how the paper computed it and did not pursue it.
+- **CAPE.** IC and ADCC are close to the paper. AD (33.6 vs 22.2) and ADD (52.0 vs 68.7) are not. mIoU is about twice the paper's (27.0 vs 13.4), although it is still by far the lowest of our five methods.
+- **mu-CAPE.** ADD and ADCC are close to the paper. AD and IC are better than the paper's (IC 47.0 vs 30.9, a large gap we cannot fully explain), and mIoU is higher.
+- **Borda Count is not comparable to the paper's.** The paper ranks 12 methods per dataset and we rank 5. CAM and Grad-CAM tie on several metrics and our sort breaks ties by list order, so their BC difference (4 vs 2) is tie-breaking noise.
+- **Sanity checks. [TODO]** Report (a) test accuracy of both heads (the paper's Table 2 gives 83.34 vanilla and 82.12 for CAPE (PF)), and (b) the output of the sum-to-confidence check below.
+
+```python
+with torch.no_grad():
+    out = net(image_tensor.unsqueeze(0))
+c = pred_class
+print('sum of CAPE map :', out['cape']['weighted_contribution'][0, c].sum().item())
+print('cape outcome[c] :', out['cape']['outcome'][0, c].item())
+print('cape outcome sum:', out['cape']['outcome'][0].sum().item())
 ```
-Metric     CAPE (Old -> New)             μ-CAPE (Old -> New)
------------------------------------------------------------------
-AD ↓       57.70% -> 33.55% (-24.15)     22.80% -> 11.24% (-11.56)
-IC ↑        6.70% -> 25.61% (+18.91)     25.80% -> 46.96% (+21.16)
-ADD ↑      40.03% -> 52.04% (+12.01)     67.42% -> 71.48% (+4.06)
-ADCC ↑     52.90% -> 74.66% (+21.76)     78.41% -> 85.74% (+7.33)
+
+CAPE's defining claim is that region contributions for a class add up to the model's confidence in that class. If the first two numbers match, that is direct evidence our implementation reflects the method. **[TODO: paste result.]**
+
+---
+
+## 5. Experiment: how much does the AD ranking depend on the mask?
+
+**Question.** How much does the ranking of explanation methods under AD depend on how a heatmap is turned into a mask?
+
+**Setup** (`experiments/mask_convention_experiment.py`; n = 1,000 test images, a nested prefix of the 5,794; seed 123; commit **[TODO: hash]**):
+
+- Three mask families: the soft map itself (what the paper's definition uses), binary thresholds (keep cells >= theta x max, theta from 0.05 to 0.70), and same-area top-k (keep exactly the top K% of the 14x14 cells, K from 5 to 70).
+- A Random control keeps K% of cells chosen at random.
+- Every masked image is scored by both heads, so methods can be compared under the same head.
+- 95% paired-bootstrap intervals over images. Treat these as descriptive, because many unadjusted comparisons are involved.
+- Outputs: `ad_summary.csv`, `paired_differences.csv`, `ad_vs_mask_convention.png`, `kept_area_vs_theta.png`.
+
+### 5.1 Findings
+
+**AD is mostly about how much image the mask keeps.** Under the soft mask, CAPE keeps 9.0% of the image against 21.4% for CAM, because CAPE's maps are concentrated. Matching on kept area with binary-threshold masks, CAPE and CAM sit on nearly the same curve:
+
+| Head | CAPE (theta, kept area, AD) | CAM at similar area (theta, kept area, AD) |
+|---|---|---|
+| Vanilla | 0.05, 28.7%, 27.9 | 0.30, 28.4%, 27.4 |
+| Vanilla | 0.10, 22.1%, 35.4 | 0.40, 21.6%, 34.6 |
+| Vanilla | 0.30, 11.2%, 58.0 | 0.60, 11.0%, 57.5 |
+| CAPE | 0.05, 28.7%, 6.7 | 0.30, 28.4%, 7.8 |
+| CAPE | 0.10, 22.1%, 9.7 | 0.40, 21.6%, 10.6 |
+| CAPE | 0.30, 11.2%, 26.2 | 0.60, 11.0%, 24.6 |
+
+These pairs were matched by hand. A full AD-vs-kept-area plot from `ad_summary.csv` would show the same thing more cleanly **[TODO: add this figure]**.
+
+**With exactly equal area (top-k), CAPE's gap mostly disappears.** CAPE minus Grad-CAM, CAPE head:
+
+| K | 5% | 10% | 20% | 30% | 50% | 70% |
+|---|---|---|---|---|---|---|
+| Difference (AD points) | +4.2 | +2.9 | +0.3 | +0.1 | +0.2 | +0.1 |
+
+The intervals include 0 at K = 20, 30 and 70. At K = 5-10 CAPE's top cells are slightly worse than CAM's, so the effect is not purely an area artifact. At large K every method's AD falls toward 2% (a floor effect), so K = 5-30 is the informative range. At large K CAPE's sparse maps also run out of non-zero cells, and ties are then broken in raster order.
+
+**Every method is far better than random.** At K = 30%, AD is about 26-28% for the methods and 97.7% for Random (vanilla head).
+
+**Rankings change with the convention.** On the vanilla head Grad-CAM++ is best under the soft mask and most thresholds, while CAM is best under top-k for K >= 10. CAPE is last under every soft and threshold condition on both heads, but third of five under top-k at K >= 30.
+
+**Head choice matters about as much as method choice.** The same CAM maps score AD 24.3 on the vanilla head and 13.0 on the CAPE head. Same-head comparisons of mu-CAPE and CAM:
+
+| Head | mu-CAPE | CAM |
+|---|---|---|
+| CAPE head | 11.5 | 13.0 |
+| Vanilla head | 22.7 | 24.3 |
+
+mu-CAPE's AD edge over CAM is therefore about 1.5 points on either head. The 13-point gap in our main table (11.2 vs 24.4) comes mostly from pairing each method with a different head. A plausible reason is that the CAPE head's outputs are softer (the paper notes CAPE's "soft prediction confidence"), which would shrink relative drops, but we did not test this.
+
+---
+
+## 6. Does this uphold or break the paper's claims?
+
+| Paper claim | Verdict |
+|---|---|
+| Per-region CAPE values sum to the class confidence | **[TODO]** Pending the sum-to-confidence check. |
+| CAPE is more class-discriminative than CAM (low mIoU) | **Reproduced in direction.** 27.0 vs 74.9 (paper: 13.4 vs 75.9). Magnitude differs. |
+| CAPE's faithfulness is comparable to CAM's (AD 22.2 vs 21.2) | **Not reproduced under the soft mask** (CAPE 33.6, CAM 24.4). At matched kept area the two are close, so the gap mostly reflects how little image CAPE's soft mask keeps. This does not explain why the paper's own CAPE does better than ours (see Limitations). |
+| mu-CAPE is the strongest method | **Weakly supported.** It has the top BC among our five, but BC is not comparable to the paper's. Its same-head AD edge over CAM is about 1.5 points. In the paper's Table 1, the strongest result belongs to mu-CAPE (TS); mu-CAPE (PF), which we reproduce, scores BC 5 on CUB, below Score-CAM's 6. |
+| CAM and Grad-CAM behave almost identically on this architecture | **Reproduced.** |
+
+Overall, our evidence neither breaks nor confirms the paper. What it shows is that conclusions about CAPE's faithfulness depend on the mask convention and on which head scores the mask.
+
+---
+
+## 7. Limitations
+
+- **One checkpoint**, one seed, and n = 1,000 for the experiment (nested within the 5,794). Intervals are over images only.
+- **Section 4.3 does not say which head Ψ refers to.** Pairing CAPE-family methods with the CAPE head and the CAM family with the vanilla head is our reading, supported by the paper's statement that CAPE should not be used to explain the vanilla classifier.
+- **Masking details.** We mask in ImageNet-normalized space (so "removed" means mean colour, not black), normalize the 14x14 map and then upsample it bilinearly, while the paper describes upsampling and then min-max normalizing. Top-k masks are blocky because of nearest-neighbour upsampling. Any of these could contribute to the remaining gap to the paper.
+- **The remaining CAPE gap is unresolved.** The paper's CAPE has a lower mIoU and a better AD than ours. Sparsity alone cannot explain that, so something else differs (pipeline details, temperature, or training).
+- **mIoU thresholds.** mIoU uses 0.2 x max on the 14x14 map. We did not sweep it.
+- **`best.pth` selection.** It is chosen by test accuracy and then evaluated on the same test set.
+- **PF initialization.** **[TODO: confirm.]** `train_pf.py` loads the full TS state dict, so the CAPE head starts from its TS-trained weights. The paper describes initializing the CAPE layer from the vanilla classifier. State which one our runs did.
+
+---
+
+## 8. Reproducing
+
+```bash
+python src/metrics.py --checkpoint <best.pth> --processed_dir <dir with test.pkl> --num_images 5794
+python experiments/mask_convention_experiment.py --checkpoint <best.pth> \
+    --processed_dir <dir with test.pkl> --output_dir results/mask_convention --num_images 1000
 ```
 
-### Analysis of the Corrected State
-* **CAPE Recovery:** IC recovered by **$+18.91\%$** (from $6.70\%$ to $25.61\%$, matching the paper's $26.50\%$), and AD dropped by **$-24.15\%$** (from $57.70\%$ to $33.55\%$).
-* **$\mu$-CAPE Gains:** AD dropped to **$11.24\%$** (surpassing the published $15.90\%$), and IC reached **$46.96\%$** (surpassing the published $30.90\%$).
-* **The Lingering Discrepancy:** While IC, ADD, ADCC, and mIoU aligned with the paper's reported ranges, CAPE's AD leveled out at **$33.55\%$** instead of the paper's reported **$22.20\%$**. 
-
----
-
-## 5. Investigating the Remaining AD Gap: Mask Sensitivity Experiment
-
-To determine why CAPE's AD remained at $33.55\%$ despite the fixes to `metrics.py`, we designed `experiments/mask_convention_experiment.py`. The experiment measures whether evaluation conventions (soft masking vs. binarization cutoffs) and retained mask surface area drive the metric difference.
-
-### Experimental Setup
-* **Sample Size:** $N = 1{,}000$ test images with fixed seed `123`.
-* **Confidence Intervals:** 95% paired bootstrap resampling ($B = 2{,}000$).
-* **Dual Head Testing:** Every condition scored against both the **Vanilla Head** (`orig`) and **Post-Fitted Head** (`cape`).
-* **Mask Conditions:**
-  * **Continuous Soft Mask:** Standard element-wise multiplication ($x \odot M$).
-  * **Thresholded Mask ($\theta$):** Binary retention where $M \ge \theta \cdot \max(M)$ for $\theta \in [0.05, 0.70]$.
-  * **Area-Controlled Mask (Top-$k$):** Forcing every method to retain the exact same top $k\%$ of spatial cells ($k \in [5\%, 70\%]$).
-  * **Random Baseline:** Identical $k\%$ budget selected uniformly at random.
-
----
-
-## 6. Comprehensive Empirical Results ($N = 1{,}000$)
-
-### Average Drop (%) across Heads and Conditions
-
-#### Scored by the Vanilla Backbone Head (`orig`)
-| Condition | CAM | Grad-CAM | Grad-CAM++ | CAPE | $\mu$-CAPE | Random |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Soft** | $24.3 \pm 1.7$ | $24.3 \pm 1.7$ | $21.8 \pm 1.7$ | $57.3 \pm 2.2$ | $22.7 \pm 1.7$ | — |
-| **$\theta = 0.10$** | $15.4 \pm 1.4$ | $15.4 \pm 1.4$ | $13.1 \pm 1.3$ | $35.4 \pm 2.1$ | $15.4 \pm 1.4$ | — |
-| **$\theta = 0.20$** | $21.7 \pm 1.7$ | $21.7 \pm 1.7$ | $19.8 \pm 1.6$ | $47.4 \pm 2.2$ | $20.7 \pm 1.7$ | — |
-| **$\theta = 0.40$** | $34.6 \pm 2.1$ | $34.5 \pm 2.1$ | $30.7 \pm 2.0$ | $67.8 \pm 2.2$ | $30.7 \pm 2.0$ | — |
-| **Top 5%** | $88.5 \pm 1.4$ | $88.5 \pm 1.4$ | $88.2 \pm 1.4$ | $90.6 \pm 1.3$ | $88.7 \pm 1.4$ | $99.0 \pm 0.3$ |
-| **Top 10%** | $67.7 \pm 2.1$ | $67.7 \pm 2.1$ | $68.1 \pm 2.2$ | $71.5 \pm 2.1$ | $69.0 \pm 2.1$ | $98.9 \pm 0.3$ |
-| **Top 20%** | $40.5 \pm 2.2$ | $40.5 \pm 2.2$ | $42.0 \pm 2.2$ | $42.2 \pm 2.2$ | $41.5 \pm 2.2$ | $98.4 \pm 0.3$ |
-| **Top 30%** | $26.2 \pm 1.8$ | $26.2 \pm 1.8$ | $27.8 \pm 1.9$ | $27.0 \pm 1.8$ | $27.6 \pm 1.9$ | $97.7 \pm 0.3$ |
-| **Top 50%** | $13.3 \pm 1.4$ | $13.3 \pm 1.4$ | $15.4 \pm 1.4$ | $13.8 \pm 1.4$ | $14.6 \pm 1.4$ | $91.8 \pm 1.0$ |
-
-#### Scored by the Post-Fitted CAPE Head (`cape`)
-| Condition | CAM | Grad-CAM | Grad-CAM++ | CAPE | $\mu$-CAPE | Random |
-| :--- | :---: | :---: | :---: | :---: | :---: | :---: |
-| **Soft** | $13.0 \pm 1.2$ | $13.0 \pm 1.2$ | $12.1 \pm 1.1$ | $34.1 \pm 2.0$ | $11.5 \pm 1.1$ | — |
-| **$\theta = 0.10$** | $6.1 \pm 0.5$ | $6.1 \pm 0.5$ | $7.6 \pm 0.5$ | $9.7 \pm 1.1$ | $6.7 \pm 0.5$ | — |
-| **$\theta = 0.20$** | $6.5 \pm 0.7$ | $6.5 \pm 0.7$ | $7.7 \pm 0.7$ | $17.3 \pm 1.6$ | $6.9 \pm 0.6$ | — |
-| **$\theta = 0.40$** | $10.6 \pm 1.1$ | $10.6 \pm 1.1$ | $10.4 \pm 1.0$ | $37.3 \pm 2.2$ | $9.4 \pm 1.0$ | — |
-| **Top 5%** | $68.1 \pm 2.0$ | $68.1 \pm 2.0$ | $68.1 \pm 1.9$ | $72.2 \pm 1.9$ | $68.6 \pm 2.0$ | $96.2 \pm 0.3$ |
-| **Top 10%** | $33.5 \pm 2.1$ | $33.5 \pm 2.1$ | $35.6 \pm 2.0$ | $36.4 \pm 2.1$ | $35.4 \pm 2.1$ | $96.0 \pm 0.3$ |
-| **Top 20%** | $10.8 \pm 1.2$ | $10.8 \pm 1.2$ | $12.6 \pm 1.3$ | $11.1 \pm 1.3$ | $11.5 \pm 1.2$ | $95.1 \pm 0.4$ |
-| **Top 30%** | $4.7 \pm 0.7$ | $4.7 \pm 0.7$ | $5.9 \pm 0.8$ | $4.8 \pm 0.8$ | $5.1 \pm 0.8$ | $93.8 \pm 0.5$ |
-| **Top 50%** | $2.3 \pm 0.4$ | $2.3 \pm 0.4$ | $3.2 \pm 0.5$ | $2.5 \pm 0.5$ | $2.6 \pm 0.4$ | $86.6 \pm 1.0$ |
-
----
-
-### Kept Area Analysis (% of Image Canvas Preserved)
-
-| Condition | CAM | Grad-CAM | Grad-CAM++ | CAPE | $\mu$-CAPE |
-| :--- | :---: | :---: | :---: | :---: | :---: |
-| **Soft Mask** | $21.4\%$ | $21.4\%$ | $25.5\%$ | **$9.0\%$** | $23.2\%$ |
-| **$\theta = 0.05$** | $63.0\%$ | $63.0\%$ | $78.4\%$ | $28.7\%$ | $63.5\%$ |
-| **$\theta = 0.10$** | $49.3\%$ | $49.3\%$ | $59.7\%$ | $22.1\%$ | $52.4\%$ |
-| **$\theta = 0.20$** | $36.7\%$ | $36.7\%$ | $43.0\%$ | **$15.3\%$** | **$40.4\%$** |
-| **$\theta = 0.30$** | $28.4\%$ | $28.4\%$ | $33.7\%$ | $11.2\%$ | $32.1\%$ |
-| **$\theta = 0.50$** | $15.9\%$ | $15.9\%$ | $19.2\%$ | $5.9\%$ | $18.6\%$ |
-| **Top-$k$ ($k=20$)** | **$19.9\%$** | **$19.9\%$** | **$19.9\%$** | **$19.9\%$** | **$19.9\%$** |
-
----
-
-## 7. Key Findings Explained Simply
-
-### 1. The Sparsity Penalty Solves the Table 1 Mystery
-Under continuous soft masks, CAPE retains on average only **$9.0\%$** of the total image canvas, whereas $\mu$-CAPE keeps **$23.2\%$** and Grad-CAM keeps **$21.4\%$**. 
-* Because CAPE naturally produces sharp, focused maps, continuous soft masking removes over $90\%$ of visual information, leading to an AD of **$34.1\%$** (or $33.55\%$ in full evaluation).
-* When thresholded at **$\theta = 0.20$** (the threshold used by the authors for mIoU), CAPE's kept area increases to **$15.3\%$**, causing its AD to drop immediately to **$17.3\% \pm 1.6\%$**, aligning with the published $22.2\%$ range.
-
-### 2. Equalizing Canvas Area Eliminates the Performance Gap
-Under thresholding ($\theta$), $\mu$-CAPE retains **$40.4\%$** of the image at $\theta=0.20$—**$2.6\times$ more surface area than CAPE**. Its lower Average Drop is largely a function of keeping more contextual pixels around the bird.
-
-When methods are tested using **Area-Matched Top-$k$ masks** (forcing every method to keep the exact same number of pixels), the difference between CAPE, $\mu$-CAPE, and Grad-CAM collapses:
-* **At Top 20% budget:** Grad-CAM scores $10.8\%$, CAPE scores $11.1\%$, and $\mu$-CAPE scores $11.5\%$. The paired difference between CAPE and Grad-CAM is $+0.3\%$ [$95\%$ CI: $-0.3\%, +1.0\%$]—statistically indistinguishable from zero.
-* **At Top 30% budget:** Grad-CAM scores $4.7\%$, CAPE scores $4.8\%$, and $\mu$-CAPE scores $5.1\%$. The paired difference is $+0.1\%$ [$95\%$ CI: $-0.3\%, +0.5\%$].
-
-While all methods significantly outperform the `Random` baseline (e.g., $\sim 11\%$ vs. $95.1\%$ at $k=20\%$), ranking variations among them under unconstrained masking are driven by retained area rather than feature ranking accuracy.
-
-### 3. Grad-CAM and CAM Are Analytically Identical
-Across all conditions, CAM and Grad-CAM produced identical numbers ($24.40\%$ old, $24.40\%$ new, $13.0\%$ soft on CAPE head). Because ResNet-50 uses Global Average Pooling (GAP) directly before the final linear layer:
-$$\alpha_k^c = \frac{1}{Z} \sum_{i,j} \frac{\partial Y^c}{\partial A_{i,j}^k} = w_k^c$$
-Grad-CAM simplifies directly to CAM in this architecture, explaining why their plotted curves overlap completely.
-
-### 4. Classifier Head Asymmetry
-The post-fitted projection layer is intrinsically more resilient to missing information than the vanilla linear head. Every attribution method saw its Average Drop cut roughly in half when scored through the post-fitted head (e.g., Grad-CAM drops from $24.3\%$ to $13.0\%$). Evaluating baselines on the vanilla head while scoring CAPE variants on the post-fitted head evaluates them on different baselines of occlusion tolerance.
-
----
-
-## 8. Artifact Locations
-
-All raw evaluation records and generated visual curves are synced to Hugging Face under `umamamianoor/cape-cub-pf` in the `final_third_experiment` folder:
-* `ad_summary.csv`: Summary metrics and area percentages across all conditions.
-* `paired_differences.csv`: Paired bootstrap differences and confidence intervals.
-* `ad_vs_mask_convention.png`: Comparative sensitivity plots across $\theta$ and Top-$k$ sweeps.
-* `kept_area_vs_theta.png`: Canvas area retention curves illustrating spatial sparsity.
-* `per_image.pkl`: Raw sample-level metric dictionaries.
+Checkpoints and logs: Hugging Face (links in the main README). Provenance: see `PROVENANCE.md`. Metrics code is written by us from the paper's Section 4.3. CAM, CAPE and mu-CAPE maps come from the authors' model code, and Grad-CAM and Grad-CAM++ are our implementations.
