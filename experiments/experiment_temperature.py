@@ -8,7 +8,12 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from PIL import Image
 
-sys.path.insert(0, os.path.dirname(__file__))
+# Resolve repository root and add both root and src/ to sys.path
+CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
+REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
+sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
+sys.path.insert(0, REPO_ROOT)
+
 from explain import build_model, GradCAMHooks, grad_cam
 from configs import transforms as cape_transforms
 
