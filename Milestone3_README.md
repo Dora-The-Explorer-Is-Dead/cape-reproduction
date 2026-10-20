@@ -188,22 +188,22 @@ Soft masks can retain different effective amounts of the image because the maps 
 
 #### B. Binary threshold masks
 
-A binary mask retains cells whose heatmap values are at least a fraction \(\theta\) of the maximum map value:
+A binary mask retains cells whose heatmap values are at least a fraction $theta$ of the maximum map value:
 
-\[
+$$
 M_{ij}=
 \begin{cases}
 1 & E_{ij}\geq \theta\max(E)\\
 0 & \text{otherwise}
 \end{cases}
-\]
+$$
 
 The experiment uses:
 
-\[
+$$
 \theta\in
 \{0.05,0.10,0.20,0.30,0.40,0.50,0.60,0.70\}
-\]
+$$
 
 The binary map is bilinearly upsampled to the input resolution before thresholding, as implemented in the experiment code. Since the upsampled mask is binary at that point, the resulting mask is binary.
 
