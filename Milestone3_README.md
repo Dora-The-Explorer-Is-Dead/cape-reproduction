@@ -141,9 +141,7 @@ The experiment selects 1,000 images without replacement from the test data using
 
 For each image, the predicted class is determined by the vanilla classifier:
 
-\[
-c = \arg\max_j p_{\mathrm{orig}}(j \mid x)
-\]
+$$c = \arg\max_j p_{\text{orig}}(j \mid x)$$
 
 All explanation methods generate their maps for this same predicted class. Each masked image is then evaluated by both classifier heads.
 
