@@ -25,7 +25,6 @@ pip install streamlit torch torchvision matplotlib opencv-python Pillow numpy hu
 
 ```
 
-*(If you have a `requirements.txt` file, you can simply run `pip install -r requirements.txt` instead).*
 
 ### Step 3: Download the Model Weights (`best.pth`)
 
@@ -50,4 +49,4 @@ streamlit run app.py
 
 ```
 
-This command will initialize the app and automatically open it in your default web browser (usually at `http://localhost:8501`). From there, you can upload your CUB dataset images and view the visual explanation heatmaps!
+This command will initialize the app and automatically open it in your default web browser (usually at `http://localhost:8501`). From there, you can upload your CUB dataset images and view the visual explanation heatmaps! DEMO images have been added in the relevant folder for your ease.
