@@ -1,14 +1,26 @@
 """
-Implements the paper's Section 4.3 evaluation metrics (Chowdhury et al., CVPR 2024).
+Implements the paper's Section 4.3 evaluation metrics, from the formulas in
+the paper text (Chowdhury et al., CVPR 2024) — the reference repo
+(AIML-MED/CAPE) did not include an evaluation/metrics script for us to adapt,
+so this is built directly from the published equations, not their code.
+Cross-checked against the numbers in a report/PROVENANCE.md note if results
+look inconsistent with Table 1.
 
-Fixes applied:
-1. Binarized thresholding: Converts the heatmap into a binary mask (threshold_frac * max)
-   before masking, matching standard CAM literature (Chattopadhay et al.).
-2. Head routing: Routes CAPE to the trained 'cape' head and other methods to the 'orig' head.
+Metrics:
+  AD   (Average Drop in confidence)      — lower is better
+  IC   (Average Increase in confidence)  — higher is better
+  ADD  (AD in Deletion)                  — higher is better (paper's convention)
+  ADCC (harmonic mean of coherency, complexity, AD) — higher is better
+  mIoU (overlap between top-2 class explanation maps) — lower is better (per paper)
+  BC   (Borda Count ranking across methods, computed last from the other five)
+
+Usage:
+    python src/metrics.py --checkpoint <best.pth> --processed_dir <path> --num_images 200
 """
 
 import os
 import sys
+import json
 import pickle
 import argparse
 
@@ -18,7 +30,7 @@ import torch.nn.functional as F
 from PIL import Image
 
 sys.path.insert(0, os.path.dirname(__file__))
-from explain import build_model, GradCAMHooks, generate_all_maps, normalize_map
+from explain import build_model, GradCAMHooks, generate_all_maps, normalize_map, parse_args as explain_parse_args  # noqa: E402
 
 CAPE_REPO_PATH = next((p for p in [
     os.environ.get('CAPE_REPO_PATH'),
@@ -26,10 +38,8 @@ CAPE_REPO_PATH = next((p for p in [
     '/kaggle/working/cape-reference',
     '/content/cape-reference',
 ] if p and os.path.isdir(p)), None)
-
-if CAPE_REPO_PATH is not None:
-    sys.path.insert(0, CAPE_REPO_PATH)
-    from configs import transforms as cape_transforms
+sys.path.insert(0, CAPE_REPO_PATH)
+from configs import transforms as cape_transforms  # noqa: E402
 
 
 def parse_args():
@@ -37,59 +47,98 @@ def parse_args():
     p.add_argument('--checkpoint', type=str, required=True)
     p.add_argument('--processed_dir', type=str, required=True)
     p.add_argument('--output_dir', type=str, default='results/tables')
-    p.add_argument('--num_images', type=int, default=200)
+    p.add_argument('--num_images', type=int, default=200,
+                    help='Number of test images to evaluate on (paper uses the full test '
+                         'set; we default to a subset for tractable runtime — note this '
+                         'in the report if the full 5,794 is not used).')
     p.add_argument('--image_size', type=int, default=448)
     p.add_argument('--num_class', type=int, default=200)
     p.add_argument('--network', type=str, default='resnet50')
-    p.add_argument('--mask_threshold_frac', type=float, default=0.2,
-                   help="Binary cutoff as a fraction of max activation (standard is 0.2)")
     p.add_argument('--iou_threshold_frac', type=float, default=0.2,
-                   help="Threshold fraction for mIoU computation")
+                    help="mask threshold as a fraction of each map's max value, per the paper's mIoU definition")
     p.add_argument('--seed', type=int, default=123)
-    p.add_argument('--checkpoint_every', type=int, default=50)
+    p.add_argument('--cape_scoring_head', choices=['orig', 'cape'], default='orig',
+                    help="Which classifier head scores the masked images (and picks the predicted/"
+                         "top-2 classes) for the CAPE and mu-CAPE rows. 'orig' = the vanilla head, "
+                         "used for every method in all earlier runs (default, keeps old results "
+                         "comparable). 'cape' = CAPE's own prediction p_hat, which is the quantity "
+                         "CAPE's explanation actually decomposes. CAM/Grad-CAM/Grad-CAM++ are ALWAYS "
+                         "scored with the vanilla head, so they act as a control.")
+    p.add_argument('--checkpoint_every', type=int, default=100,
+                    help='Save partial results every N images, so a Kaggle session wipe '
+                         'only costs progress since the last checkpoint, not the whole run.')
     return p.parse_args()
 
 
 def get_confidence(net, image_tensor, target_class, head='orig'):
-    """Queries the specific classifier head corresponding to the explanation method."""
+    """Probability of target_class from the chosen head: 'orig' = softmax of the vanilla
+    classifier, 'cape' = CAPE's own p_hat (already a probability distribution)."""
     with torch.no_grad():
         out = net(image_tensor.unsqueeze(0))
-        probs = out[head]['outcome'].softmax(dim=1)
+        if head == 'cape':
+            return out['cape']['outcome'][0, target_class].item()
+        probs = out['orig']['outcome'].softmax(dim=1)
         return probs[0, target_class].item()
 
 
-def apply_mask(image_tensor, heatmap_2d, keep=True, threshold_frac=0.2):
+CAPE_FAMILY = ('CAPE', 'mu-CAPE')
+
+
+def select_classes_and_heads(methods, top2_orig, top2_cape, scoring_head):
+    """For each method, which class is 'predicted', which is 'second', and which head scores it.
+    Only the CAPE-family methods can switch to the CAPE head; the CAM family never does."""
+    class_for, second_for, head_for = {}, {}, {}
+    for m in methods:
+        use_cape = scoring_head == 'cape' and m in CAPE_FAMILY
+        src = top2_cape if use_cape else top2_orig
+        class_for[m], second_for[m] = src[0], src[1]
+        head_for[m] = 'cape' if use_cape else 'orig'
+    return class_for, second_for, head_for
+
+
+def apply_mask(image_tensor, heatmap_2d, keep):
     """
-    Binarizes the explanation map at (threshold_frac * max_val) and applies it to the image.
-    keep=True  -> Keeps only highlighted regions (for AD / IC)
-    keep=False -> Deletes highlighted regions (for ADD)
+    Elementwise-multiplies the image by the (upsampled) explanation map.
+    keep=True  -> masked image = image * E   (used for AD / IC — keep only highlighted region)
+    keep=False -> masked image = image * (1 - E) (used for ADD — delete the highlighted region)
     """
     h, w = image_tensor.shape[-2:]
     mask = torch.from_numpy(heatmap_2d).float().to(image_tensor.device)
     mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=False).squeeze()
-
-    cutoff = threshold_frac * mask.max()
-    binary_mask = (mask >= cutoff).float()
-
     if not keep:
-        binary_mask = 1.0 - binary_mask
-
-    return image_tensor * binary_mask.unsqueeze(0)
+        mask = 1 - mask
+    return image_tensor * mask.unsqueeze(0)
 
 
 def average_drop(y_c, o_c):
+    """AD(x) = max(y_c - o_c, 0) / y_c"""
     return max(y_c - o_c, 0.0) / max(y_c, 1e-8)
 
 
 def average_increase(y_c, o_c):
+    """IC(x) = 1(y_c < o_c)"""
     return 1.0 if o_c > y_c else 0.0
 
 
 def ad_in_deletion(y_c, d_c):
+    """ADD(x) = max(y_c - d_c, 0) / y_c — same shape as AD, computed on the
+    deletion-masked image (region removed) instead of the keep-masked image."""
     return max(y_c - d_c, 0.0) / max(y_c, 1e-8)
 
 
 def coherency(e_c, e_c_prime):
+    """
+    coh(Ec, E'c) = (corr(Ec, E'c) + 1) / 2 — min-max normalization of Pearson
+    correlation (range [-1, 1]) into [0, 1], per ADCC (Poppi et al.), which the
+    CAPE paper's Section 4.3 cites for this metric.
+
+    BUG FIX: an earlier version of this function used (2*corr + 1) / 2, which
+    simplifies to corr + 0.5 — not a valid [0,1] normalization (corr=1 gives 1.5,
+    not 1.0). This inflated coherency, and therefore ADCC, consistently across
+    every method (observed: ~87 for all methods vs. the paper's ~74-80) — a
+    uniform offset rather than a per-method error is exactly the signature of a
+    formula bug like this rather than a reproduction-quality issue.
+    """
     a = e_c.flatten()
     b = e_c_prime.flatten()
     if a.std() < 1e-8 or b.std() < 1e-8:
@@ -102,16 +151,19 @@ def coherency(e_c, e_c_prime):
 
 
 def complexity(e_c):
+    """com(Ec) = |Ec| — L1 norm, normalized by map size so it's comparable across resolutions."""
     return float(np.abs(e_c).sum() / e_c.size)
 
 
 def adcc_score(coh, com, ad):
+    """ADCC(x) = 3 / (1/coh + 1/(1-com) + 1/(1-ad)) — harmonic mean of three terms."""
     eps = 1e-8
     terms = [1.0 / max(coh, eps), 1.0 / max(1 - com, eps), 1.0 / max(1 - ad, eps)]
     return 3.0 / sum(terms)
 
 
 def compute_iou(map1, map2, threshold_frac):
+    """IoU between two binarized maps, each thresholded at threshold_frac * its own max."""
     t1 = threshold_frac * map1.max()
     t2 = threshold_frac * map2.max()
     mask1 = map1 > t1
@@ -122,6 +174,11 @@ def compute_iou(map1, map2, threshold_frac):
 
 
 def borda_count(results):
+    """
+    Ranks methods on each metric (respecting each metric's better-direction),
+    scores 1st=3, 2nd=2, 3rd=1, rest=0, and sums across metrics.
+    `results`: {method_name: {metric_name: value}}
+    """
     directions = {'AD': 'lower', 'IC': 'higher', 'ADD': 'higher', 'ADCC': 'higher', 'mIoU': 'lower'}
     methods = list(results.keys())
     bc = {m: 0 for m in methods}
@@ -136,19 +193,25 @@ def borda_count(results):
     return bc
 
 
-def evaluate_one_image(net, hooks, image_tensor, heatmaps, target_class, threshold_frac=0.2):
+def evaluate_one_image(net, hooks, image_tensor, heatmaps, class_for, head_for):
+    """Computes AD, IC, ADD, coherency, complexity, ADCC (and coverage) for every method's map
+    on one image. `heatmaps[m]` is method m's map for class_for[m], scored with head_for[m]."""
     per_method = {}
 
     for method, e_c in heatmaps.items():
-        head = 'cape' if method == 'CAPE' else 'orig'
-        y_c = get_confidence(net, image_tensor, target_class, head=head)
+        target_class = class_for[method]
+        head = head_for[method]
 
-        keep_masked = apply_mask(image_tensor, e_c, keep=True, threshold_frac=threshold_frac)
-        o_c = get_confidence(net, keep_masked, target_class, head=head)
+        y_c = get_confidence(net, image_tensor, target_class, head)
 
-        del_masked = apply_mask(image_tensor, e_c, keep=False, threshold_frac=threshold_frac)
-        d_c = get_confidence(net, del_masked, target_class, head=head)
+        keep_masked = apply_mask(image_tensor, e_c, keep=True)
+        o_c = get_confidence(net, keep_masked, target_class, head)
 
+        del_masked = apply_mask(image_tensor, e_c, keep=False)
+        d_c = get_confidence(net, del_masked, target_class, head)
+
+        # Recompute the explanation map on the keep-masked image, for coherency.
+        # Re-uses the same heatmap-generation path so it's method-consistent.
         keep_masked_heatmaps = generate_all_maps(net, keep_masked, target_class, hooks)
         e_c_prime = keep_masked_heatmaps[method]
 
@@ -159,7 +222,8 @@ def evaluate_one_image(net, hooks, image_tensor, heatmaps, target_class, thresho
         com = complexity(e_c)
         adcc = adcc_score(coh, com, ad)
 
-        per_method[method] = {'AD': ad, 'IC': ic, 'ADD': add, 'ADCC': adcc}
+        # COV: mean of the [0,1] map = the average fraction of each pixel the soft mask keeps.
+        per_method[method] = {'AD': ad, 'IC': ic, 'ADD': add, 'ADCC': adcc, 'COV': float(e_c.mean())}
 
     return per_method
 
@@ -173,7 +237,7 @@ def main():
     hooks = GradCAMHooks(net.net)
 
     with open(os.path.join(args.processed_dir, 'test.pkl'), 'rb') as f:
-        test_data, _ = pickle.load(f)
+        test_data, test_labels = pickle.load(f)
 
     _, test_transform = cape_transforms.cub_transform(args.image_size)
 
@@ -182,18 +246,26 @@ def main():
     print(f'Evaluating on {n} test images (full test set is {len(test_data)})')
 
     methods = ['CAM', 'Grad-CAM', 'Grad-CAM++', 'CAPE', 'mu-CAPE']
+
+    # Resume from a checkpoint if one exists, so a session wipe doesn't cost the whole run.
     ckpt_path = os.path.join(args.output_dir, 'metrics_checkpoint.pkl')
     start_count = 0
-
+    run_config = {'checkpoint': args.checkpoint, 'cape_scoring_head': args.cape_scoring_head,
+                  'num_images': n, 'seed': args.seed, 'iou_threshold_frac': args.iou_threshold_frac}
     if os.path.isfile(ckpt_path):
         with open(ckpt_path, 'rb') as f:
             ckpt = pickle.load(f)
+        if ckpt.get('config') != run_config:
+            raise RuntimeError(
+                f'Found a metrics checkpoint at {ckpt_path} from a different run configuration '
+                f'(saved: {ckpt.get("config")}, current: {run_config}). Resuming would silently mix '
+                f'two configurations. Use a different --output_dir, or delete that checkpoint file.')
         running = ckpt['running']
         all_maps_by_method = ckpt['all_maps_by_method']
         start_count = ckpt['count']
         print(f'Resuming from checkpoint: {start_count}/{n} images already done.')
     else:
-        running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': []} for m in methods}
+        running = {m: {'AD': [], 'IC': [], 'ADD': [], 'ADCC': [], 'COV': []} for m in methods}
         all_maps_by_method = {m: [] for m in methods}
 
     try:
@@ -205,19 +277,27 @@ def main():
 
             with torch.no_grad():
                 out = net(image_tensor.unsqueeze(0))
-                probs = out['orig']['outcome'].softmax(dim=1)
-                top2_conf, top2_idx = probs.topk(2, dim=1)
-                pred_class = top2_idx[0, 0].item()
-                second_class = top2_idx[0, 1].item()
+                top2_orig = out['orig']['outcome'].softmax(dim=1).topk(2, dim=1)[1][0].tolist()
+                top2_cape = out['cape']['outcome'].topk(2, dim=1)[1][0].tolist()
 
-            heatmaps_top1 = generate_all_maps(net, image_tensor, pred_class, hooks)
-            per_method = evaluate_one_image(net, hooks, image_tensor, heatmaps_top1, pred_class,
-                                            threshold_frac=args.mask_threshold_frac)
+            class_for, second_for, head_for = select_classes_and_heads(
+                methods, top2_orig, top2_cape, args.cape_scoring_head)
 
-            heatmaps_top2 = generate_all_maps(net, image_tensor, second_class, hooks)
+            # Heatmaps are generated once per distinct class, then each method takes its own.
+            maps_cache = {}
+
+            def maps_for(cls):
+                if cls not in maps_cache:
+                    maps_cache[cls] = generate_all_maps(net, image_tensor, cls, hooks)
+                return maps_cache[cls]
+
+            heatmaps_top1 = {m: maps_for(class_for[m])[m] for m in methods}
+            heatmaps_top2 = {m: maps_for(second_for[m])[m] for m in methods}
+
+            per_method = evaluate_one_image(net, hooks, image_tensor, heatmaps_top1, class_for, head_for)
 
             for m in methods:
-                for k in ['AD', 'IC', 'ADD', 'ADCC']:
+                for k in ['AD', 'IC', 'ADD', 'ADCC', 'COV']:
                     running[m][k].append(per_method[m][k])
                 iou = compute_iou(heatmaps_top1[m], heatmaps_top2[m], args.iou_threshold_frac)
                 all_maps_by_method[m].append(iou)
@@ -227,13 +307,14 @@ def main():
 
             if (count + 1) % args.checkpoint_every == 0:
                 with open(ckpt_path, 'wb') as f:
-                    pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count + 1}, f)
-                print(f'  -> Checkpoint saved at {count + 1} images')
+                    pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count + 1, 'config': run_config}, f)
+                print(f'  -> checkpoint saved at {count + 1} images')
 
-    except Exception as e:
+    except (KeyboardInterrupt, Exception) as e:
         with open(ckpt_path, 'wb') as f:
-            pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count}, f)
-        print(f'\nInterrupted at image {count}: {e}')
+            pickle.dump({'running': running, 'all_maps_by_method': all_maps_by_method, 'count': count, 'config': run_config}, f)
+        print(f'\nInterrupted/error at image {count}: {e}')
+        print('Checkpoint saved — re-run the identical command to resume from here.')
         raise
 
     if os.path.isfile(ckpt_path):
@@ -247,24 +328,28 @@ def main():
             'ADD': float(np.mean(running[m]['ADD'])) * 100,
             'ADCC': float(np.mean(running[m]['ADCC'])) * 100,
             'mIoU': float(np.mean(all_maps_by_method[m])) * 100,
+            'COV': float(np.mean(running[m]['COV'])) * 100,
         }
 
     bc = borda_count(results)
     for m in methods:
         results[m]['BC'] = bc[m]
 
-    print(f'\n--- Results (n={n} images) ---')
-    print(f'{"Method":12s} {"AD":>6s} {"IC":>6s} {"ADD":>6s} {"ADCC":>6s} {"mIoU":>6s} {"BC":>4s}')
+    print('\n--- Results (n={} images) ---'.format(n))
+    print(f'(CAPE/mu-CAPE scored with the {args.cape_scoring_head!r} head; CAM family always vanilla)')
+    print(f'{"Method":12s} {"AD":>6s} {"IC":>6s} {"ADD":>6s} {"ADCC":>6s} {"mIoU":>6s} {"BC":>4s} {"COV":>6s}')
     for m in methods:
         r = results[m]
-        print(f'{m:12s} {r["AD"]:6.1f} {r["IC"]:6.1f} {r["ADD"]:6.1f} {r["ADCC"]:6.1f} {r["mIoU"]:6.1f} {r["BC"]:4d}')
+        print(f'{m:12s} {r["AD"]:6.1f} {r["IC"]:6.1f} {r["ADD"]:6.1f} {r["ADCC"]:6.1f} {r["mIoU"]:6.1f} {r["BC"]:4d} {r["COV"]:6.1f}')
 
     out_path = os.path.join(args.output_dir, 'metrics_results.csv')
     with open(out_path, 'w') as f:
-        f.write('Method,AD,IC,ADD,ADCC,mIoU,BC\n')
+        f.write('Method,AD,IC,ADD,ADCC,mIoU,BC,COV\n')
         for m in methods:
             r = results[m]
-            f.write(f'{m},{r["AD"]:.2f},{r["IC"]:.2f},{r["ADD"]:.2f},{r["ADCC"]:.2f},{r["mIoU"]:.2f},{r["BC"]}\n')
+            f.write(f'{m},{r["AD"]:.2f},{r["IC"]:.2f},{r["ADD"]:.2f},{r["ADCC"]:.2f},{r["mIoU"]:.2f},{r["BC"]},{r["COV"]:.2f}\n')
+    with open(os.path.join(args.output_dir, 'run_config.json'), 'w') as f:
+        json.dump(run_config, f, indent=2)
     print(f'\nSaved to {out_path}')
 
 
