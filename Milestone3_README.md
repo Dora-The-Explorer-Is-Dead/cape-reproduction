@@ -207,7 +207,7 @@ $$
 
 The binary map is bilinearly upsampled to the input resolution before thresholding, as implemented in the experiment code. Since the upsampled mask is binary at that point, the resulting mask is binary.
 
-As \(\theta\) increases, fewer pixels are generally retained. However, the proportion retained is not the same across methods at the same threshold because their heatmap values differ.
+As $\theta\$ increases, fewer pixels are generally retained. However, the proportion retained is not the same across methods at the same threshold because their heatmap values differ.
 
 If a map has no positive maximum, the implementation retains no pixels for that threshold condition.
 
@@ -215,9 +215,9 @@ If a map has no positive maximum, the implementation retains no pixels for that 
 
 This condition retains exactly the \(K\%\) highest-valued cells of each 14 × 14 map:
 
-\[
+$$
 K\in\{5,10,20,30,50,70\}
-\]
+$$
 
 For each image and method, the implementation sorts the 196 heatmap cells and retains the top \(K\%\), using a stable ordering to break ties. It then upsamples the binary mask using nearest-neighbor interpolation.
 
