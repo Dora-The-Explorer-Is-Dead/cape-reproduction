@@ -176,11 +176,9 @@ AD is a measure of confidence preservation under this masking procedure. It is n
 
 The continuous explanation map is used directly as a mask.
 
-If \(E_c\) is the explanation map for class \(c\), the masked image is:
+If $E_c$ is the explanation map for class $c$, the masked image is:
 
-\[
-x_{\mathrm{soft}}=x\odot E_c
-\]
+$$x_{\text{soft}} = x \odot E_c$$
 
 The 14 × 14 map is bilinearly upsampled to the input image resolution and clamped to the range \([0,1]\).
 
