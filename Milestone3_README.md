@@ -3,8 +3,6 @@
 Paper: Chowdhury et al., *CAPE: CAM as a Probabilistic Ensemble for Enhanced DNN Interpretation*, CVPR 2024.
 Setting: ResNet-50, CUB-200-2011, post-fitted (PF) CAPE head, 14x14 explanation maps.
 
-> Items marked **[TODO]** need a number or confirmation from our own runs before submission.
-
 ---
 
 ## 1. Summary
@@ -41,7 +39,7 @@ Both parts of that story were wrong:
 
 - The 1e-4 rerun was scored with the faulty evaluator. All it showed was that the learning rate had no detectable effect *under that evaluation*.
 - The "masking convention" suspicion was in the right area but vague. The real cause was a specific bug (wrong head).
-- **[TODO]** If the lr = 1e-4 checkpoint still exists, re-evaluate it with the corrected `metrics.py` and report the numbers here. That turns the question into a real result.
+- Further Work:  Re-evaluate the lr = 1e-4 checkpoint with the corrected `metrics.py` and report the numbers here. That turns the question into a real result.
 
 ---
 
