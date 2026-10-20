@@ -129,7 +129,11 @@ def generate_all_maps(net, image_tensor, target_class, hooks):
     heatmaps for the given target class, each normalized to [0, 1].
     """
     image_tensor = image_tensor.unsqueeze(0)
-    image_tensor.requires_grad_(False)
+    #image_tensor.requires_grad_(False)
+    #comment out this line to be able to run the app
+
+
+
 
     outputs = net(image_tensor)
 
