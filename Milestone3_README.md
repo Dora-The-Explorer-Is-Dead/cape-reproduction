@@ -540,7 +540,7 @@ The script checkpoints progress every 50 images by default. If interrupted, reru
 
 ### 8.3 Experiment outputs
 
-The experiment writes the following files to the output directory:
+The experiment writes the following files to the output directory (stored in `results/mask_convention`:
 
 | File | Purpose |
 |---|---|
