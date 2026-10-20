@@ -8,7 +8,7 @@ import torch.nn.functional as F
 import matplotlib.pyplot as plt
 from PIL import Image
 
-# Resolve repository root and add both root and src/ to sys.path
+# Path resolution: add repo root and src/
 CURRENT_DIR = os.path.dirname(os.path.abspath(__file__))
 REPO_ROOT = os.path.abspath(os.path.join(CURRENT_DIR, ".."))
 sys.path.insert(0, os.path.join(REPO_ROOT, "src"))
@@ -24,25 +24,28 @@ def parse_args():
     p.add_argument('--output_dir', type=str, default='results/experiment_threshold')
     p.add_argument('--num_images', type=int, default=150)
     p.add_argument('--seed', type=int, default=123)
+    p.add_argument('--network', type=str, default='resnet50')
+    p.add_argument('--num_class', type=int, default=200)
+    p.add_argument('--image_size', type=int, default=448)
     return p.parse_args()
 
 def apply_thresholded_mask(img_tensor, hmap, theta):
     h, w = img_tensor.shape[-2:]
     mask = torch.from_numpy(hmap).float().to(img_tensor.device)
     mask = F.interpolate(mask.unsqueeze(0).unsqueeze(0), size=(h, w), mode='bilinear', align_corners=False).squeeze()
-    # Binarize at theta fraction of max
     cutoff = theta * mask.max()
     binary_mask = (mask >= cutoff).float()
     return img_tensor * binary_mask.unsqueeze(0)
 
 def main():
     args = parse_args()
+    torch.manual_seed(args.seed)
     device = torch.device('cuda' if torch.cuda.is_available() else 'cpu')
     os.makedirs(args.output_dir, exist_ok=True)
 
     net = build_model(args, device)
     hooks = GradCAMHooks(net.net)
-    _, test_transform = cape_transforms.cub_transform(448)
+    _, test_transform = cape_transforms.cub_transform(args.image_size)
 
     with open(os.path.join(args.processed_dir, 'test.pkl'), 'rb') as f:
         test_data, _ = pickle.load(f)
@@ -58,14 +61,16 @@ def main():
 
     # Pre-extract maps and initial confidences
     samples = []
-    for idx in indices[:n]:
+    for idx in indices:
         raw = test_data[idx]
         img = Image.fromarray(raw).convert('RGB')
         x = test_transform(img).to(device)
         with torch.no_grad():
-            c = net(x.unsqueeze(0))['orig']['outcome'].argmax(dim=1).item()
-            y_orig = net(x.unsqueeze(0))['orig']['outcome'].softmax(dim=1)[0, c].item()
-            y_cape = net(x.unsqueeze(0))['cape']['outcome'][0, c].item()
+            out = net(x.unsqueeze(0))
+            c = out['orig']['outcome'].argmax(dim=1).item()
+            y_orig = out['orig']['outcome'].softmax(dim=1)[0, c].item()
+            y_cape = out['cape']['outcome'][0, c].item()
+            
         maps = generate_all_maps(net, x, c, hooks)
         samples.append({'x': x, 'c': c, 'y_orig': y_orig, 'y_cape': y_cape, 'maps': maps})
 
@@ -85,7 +90,6 @@ def main():
             results[m].append(float(np.mean(ad_epoch[m])) * 100.0)
         print(f"  theta={th:.2f} | Grad-CAM AD: {results['Grad-CAM'][-1]:.1f}% | CAPE AD: {results['CAPE'][-1]:.1f}% | mu-CAPE AD: {results['mu-CAPE'][-1]:.1f}%")
 
-    # Plot sensitivity curves
     plt.figure(figsize=(8, 5))
     plt.plot(thresholds, results['Grad-CAM'], '^--', label='Grad-CAM', color='#34495e', lw=2)
     plt.plot(thresholds, results['CAPE'], 'o-', label='CAPE (PF)', color='#e74c3c', lw=2)
@@ -100,7 +104,7 @@ def main():
 
     plot_path = os.path.join(args.output_dir, 'experiment_threshold_sensitivity.png')
     plt.savefig(plot_path, dpi=300)
-    print(f"\nSaved sensitivity plot to {plot_path}")
+    print(f"\nSaved plot to {plot_path}")
 
     csv_path = os.path.join(args.output_dir, 'threshold_sweep_data.csv')
     with open(csv_path, 'w') as f:
