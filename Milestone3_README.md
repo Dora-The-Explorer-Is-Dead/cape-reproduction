@@ -69,7 +69,7 @@ out['cape']['outcome']
 
 The following table shows the corrected reproduction results.
 
-| Method | AD ↓ | IC ↑ | ADD ↑ | ADCC ↑ | mIoU ↑ | BC ↑ |
+| Method | AD ↓ | IC ↑ | ADD ↑ | ADCC ↑ | mIoU ↓ | BC ↑ |
 |---|---:|---:|---:|---:|---:|---:|
 | CAM | 24.40 | 24.46 | 64.96 | 78.00 | 74.91 | 4 |
 | Grad-CAM | 24.40 | 24.42 | 64.96 | 77.99 | 74.91 | 2 |
