@@ -269,11 +269,11 @@ The following figure shows the average fraction of the image retained under each
 
 ![How much image each method keeps at each threshold](results/mask_convention/kept_area_vs_theta.png)
 
-**Figure 1. Retained image area under binary threshold masks.** The x-axis is the relative threshold \(\theta\); the y-axis is the average retained image area. Dotted lines show the average area retained by the corresponding soft mask.
+**Figure 1. Retained image area under binary threshold masks.** The x-axis is the relative threshold $\theta\$; the y-axis is the average retained image area. Dotted lines show the average area retained by the corresponding soft mask.
 
 The results show that the same threshold does not produce comparable retained areas across explanation methods.
 
-For example, at \(\theta=0.30\):
+For example, at \($\theta\$=0.30\):
 
 - CAPE retains approximately 11.2% of the image.
 - CAM retains approximately 28.4% of the image.
