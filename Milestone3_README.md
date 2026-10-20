@@ -321,18 +321,18 @@ The following values are approximate average AD and retained area percentages fr
 
 | Head | Method and threshold | Area retained | AD (%) |
 |---|---|---:|---:|
-| Vanilla | CAPE, \(\theta=0.05\) | 28.7% | 27.9 |
-| Vanilla | CAM, \(\theta=0.30\) | 28.4% | 27.4 |
-| Vanilla | CAPE, \(\theta=0.10\) | 22.1% | 35.4 |
-| Vanilla | CAM, \(\theta=0.40\) | 21.6% | 34.6 |
-| Vanilla | CAPE, \(\theta=0.30\) | 11.2% | 58.0 |
-| Vanilla | CAM, \(\theta=0.60\) | 11.0% | 57.5 |
-| CAPE | CAPE, \(\theta=0.05\) | 28.7% | 6.7 |
-| CAPE | CAM, \(\theta=0.30\) | 28.4% | 7.8 |
-| CAPE | CAPE, \(\theta=0.10\) | 22.1% | 9.7 |
-| CAPE | CAM, \(\theta=0.40\) | 21.6% | 10.6 |
-| CAPE | CAPE, \(\theta=0.30\) | 11.2% | 26.2 |
-| CAPE | CAM, \(\theta=0.60\) | 11.0% | 24.6 |
+| Vanilla | CAPE, \($\theta\$=0.05\) | 28.7% | 27.9 |
+| Vanilla | CAM, \($\theta\$=0.30\) | 28.4% | 27.4 |
+| Vanilla | CAPE, \($\theta\$=0.10\) | 22.1% | 35.4 |
+| Vanilla | CAM, \($\theta\$=0.40\) | 21.6% | 34.6 |
+| Vanilla | CAPE, \($\theta\$=0.30\) | 11.2% | 58.0 |
+| Vanilla | CAM, \($\theta\$=0.60\) | 11.0% | 57.5 |
+| CAPE | CAPE, \($\theta\$=0.05\) | 28.7% | 6.7 |
+| CAPE | CAM, \($\theta\$=0.30\) | 28.4% | 7.8 |
+| CAPE | CAPE, \($\theta\$=0.10\) | 22.1% | 9.7 |
+| CAPE | CAM, \($\theta\$=0.40\) | 21.6% | 10.6 |
+| CAPE | CAPE, \($\theta\$=0.30\) | 11.2% | 26.2 |
+| CAPE | CAM, \($\theta\$=0.60\) | 11.0% | 24.6 |
 
 These comparisons reinforce the pattern seen in the top-k experiment: when CAPE and CAM retain approximately the same fraction of the image, their AD values become much closer than in the original soft-mask comparison.
 
