@@ -4,6 +4,7 @@ import re
 import torch
 import torchvision.transforms as transforms
 import matplotlib.pyplot as plt
+import matplotlib.patches as patches
 import streamlit as st
 import numpy as np
 from PIL import Image
@@ -65,19 +66,14 @@ def auto_detect_class(filename, classes_map):
     
     filename_lower = filename.lower().replace("_", " ").replace("-", " ")
     
-    # 1. PRIORITY: Check for the exact bird name in the filename (Safest)
     for class_idx, class_name in classes_map.items():
-        # Clean the map name (e.g., "017.Cardinal" -> "cardinal")
         clean_name = re.sub(r'^\d+\.', '', class_name).lower().replace("_", " ")
         if clean_name in filename_lower:
             return class_idx
             
-    # 2. FALLBACK: Check for isolated numbers
-    # We use \b to ensure we only grab standalone numbers, not parts of a hash
     numbers = re.findall(r'\b\d+\b', filename)
     for num_str in numbers:
         num = int(num_str)
-        # Check exact index or 1-based index
         if num in classes_map:
             return num
         if (num - 1) in classes_map:
@@ -85,17 +81,23 @@ def auto_detect_class(filename, classes_map):
             
     return None
 
+
 # Sidebar Setup
 st.sidebar.title("Configuration")
 ckpt_input = st.sidebar.text_input("Checkpoint Path", "best.pth")
 classes_map = load_classes("classes.txt")
 
+st.sidebar.markdown("---")
+# NEW: Toggle for the paper-style grid overlay
+show_grid = st.sidebar.checkbox("Overlay Paper-Style Grid Values", value=False)
+grid_threshold = st.sidebar.slider("Grid Value Threshold", 0.0, 1.0, 0.1, 0.05, 
+                                   help="Only show boxes for normalized values above this threshold to prevent clutter.")
+
 st.title("CAPE: Bird Classification & Saliency Map Explanations")
 st.markdown(
     """
 Upload an image of a bird from the CUB-200-2011 dataset. 
-The model will output the top prediction and compare the explanation heatmaps:
-**CAM**, **Grad-CAM**, **Grad-CAM++**, **CAPE (PF)**, and **μ-CAPE (PF)**.
+The model will output the top prediction and compare the explanation heatmaps.
 """
 )
 
@@ -115,21 +117,18 @@ else:
         "Choose a bird image...", type=["jpg", "jpeg", "png"]
     )
     
-    # Dropdown setup
     class_options = ["Unknown"]
     if classes_map:
-        class_options += [f"{idx} - {name}" for idx, name in classes_map.items()]
+        class_options += list(classes_map.values())
     
-    # Check for auto-detected class
     auto_detected_idx = None
     default_dropdown_index = 0
     
     if uploaded_file is not None:
         auto_detected_idx = auto_detect_class(uploaded_file.name, classes_map)
         if auto_detected_idx is not None:
-            st.toast(f"Auto-detected true class from filename: {classes_map[auto_detected_idx]}")
-            # Find the matching dropdown string to set as default
-            target_str = f"{auto_detected_idx} - {classes_map[auto_detected_idx]}"
+            target_str = classes_map[auto_detected_idx]
+            st.toast(f"Auto-detected true class from filename: {target_str}")
             if target_str in class_options:
                 default_dropdown_index = class_options.index(target_str)
 
@@ -137,8 +136,6 @@ else:
 
     if uploaded_file is not None:
         raw_image = Image.open(uploaded_file).convert("RGB")
-        
-        # Prepare the display image to match the 448x448 model input
         orig_image_np = np.array(raw_image.resize((448, 448)))
 
         col_img, col_pred = st.columns([1, 1])
@@ -172,13 +169,11 @@ else:
 
         with col_pred:
             st.subheader("Model Prediction")
-            predicted_str = f"{class_idx} - {class_label}"
-            
-            st.metric(label="Predicted Class", value=predicted_str)
+            st.metric(label="Predicted Class", value=class_label)
             st.metric(label="Confidence", value=f"{conf.item() * 100:.2f}%")
             
             if true_class_selection != "Unknown":
-                true_idx = int(true_class_selection.split(" - ")[0])
+                true_idx = next((idx for idx, name in classes_map.items() if name == true_class_selection), None)
                 if true_idx == class_idx:
                     st.success(f"**Correct!** The true class is {true_class_selection}")
                 else:
@@ -210,9 +205,93 @@ else:
                     fig, ax = plt.subplots(figsize=(3, 3))
                     ax.imshow(orig_image_np)
                     ax.imshow(h_up, cmap='jet', alpha=0.5)
-                    ax.axis('off')
                     
+                    # NEW: Only draw the grid if the method is CAPE or mu-CAPE
+                    if show_grid and key in ["CAPE", "mu-CAPE"]:
+                        grid_h, grid_w = hm.shape
+                        cell_h = orig_image_np.shape[0] / grid_h
+                        cell_w = orig_image_np.shape[1] / grid_w
+                        
+                        hm_sum = np.sum(hm)
+                        conf_percent = conf.item() * 100
+                        
+                        for i in range(grid_h):
+                            for j in range(grid_w):
+                                val = hm[i, j]
+                                if val >= grid_threshold:
+                                    x_center = j * cell_w + cell_w / 2
+                                    y_center = i * cell_h + cell_h / 2
+                                    
+                                    prob_val = (val / hm_sum) * conf_percent
+                                    
+                                    ax.text(x_center, y_center, f"{prob_val:.1f}%", 
+                                            color='black', fontsize=6, ha='center', va='center', 
+                                            weight='bold', bbox=dict(facecolor='white', alpha=0.6, pad=0, edgecolor='none'))
+                                    
+                                    rect = patches.Rectangle((j * cell_w, i * cell_h), cell_w, cell_h, 
+                                                             linewidth=0.5, edgecolor='black', facecolor='none', alpha=0.7)
+                                    ax.add_patch(rect)
+                                    
+                    ax.axis('off')
                     st.pyplot(fig)
                     plt.close(fig)
                 else:
                     st.info("Map not available")
+
+
+        st.markdown("---")
+        st.subheader("Fine-Grained Class Discrimination (Contrastive Analysis)")
+        st.markdown("This section highlights the exact physical features that differentiate two classes by subtracting their **μ-CAPE** explanation maps. Red regions push the model toward Class A, while blue regions push it toward Class B.")
+
+        # Get top 2 predictions to set smart defaults
+        top2_prob, top2_catid = torch.topk(probs, 2)
+        top1_id = top2_catid[0][0].item()
+        top2_id = top2_catid[0][1].item()
+
+        top1_label = classes_map.get(top1_id, f"Class {top1_id}") if classes_map else f"Class {top1_id}"
+        top2_label = classes_map.get(top2_id, f"Class {top2_id}") if classes_map else f"Class {top2_id}"
+
+        # Setup dropdowns for Class A and Class B
+        col_a, col_b = st.columns(2)
+        with col_a:
+            class_a_selection = st.selectbox("Select Class A (Positive / Red)", class_options, 
+                                             index=class_options.index(top1_label) if top1_label in class_options else 0)
+        with col_b:
+            class_b_selection = st.selectbox("Select Class B (Negative / Blue)", class_options, 
+                                             index=class_options.index(top2_label) if top2_label in class_options else 0)
+
+        if class_a_selection != "Unknown" and class_b_selection != "Unknown":
+            class_a_idx = next((idx for idx, name in classes_map.items() if name == class_a_selection), None)
+            class_b_idx = next((idx for idx, name in classes_map.items() if name == class_b_selection), None)
+
+            if class_a_idx is not None and class_b_idx is not None:
+                with torch.set_grad_enabled(True):
+                    # Generate new maps specifically for the selected classes
+                    heatmaps_A = generate_all_maps(net, img_tensor.squeeze(0), class_a_idx, hooks)
+                    heatmaps_B = generate_all_maps(net, img_tensor.squeeze(0), class_b_idx, hooks)
+
+                if "mu-CAPE" in heatmaps_A and "mu-CAPE" in heatmaps_B:
+                    hm_A = heatmaps_A["mu-CAPE"]
+                    hm_B = heatmaps_B["mu-CAPE"]
+                    
+                    # Core Math: Subtract the raw maps
+                    diff_map = hm_A - hm_B
+                    
+                    # Upsample for visual overlay
+                    diff_up = np.array(Image.fromarray(diff_map).resize(
+                        (orig_image_np.shape[1], orig_image_np.shape[0]), Image.BILINEAR))
+                    
+                    fig, ax = plt.subplots(figsize=(6, 6))
+                    ax.imshow(orig_image_np)
+                    
+                    # Center the color map on 0 to ensure white means "neutral/shared feature"
+                    max_abs = max(abs(diff_up.min()), abs(diff_up.max()))
+                    max_abs = max_abs if max_abs > 0 else 1.0
+                        
+                    # bwr = Blue (Class B), White (Neutral), Red (Class A)
+                    im = ax.imshow(diff_up, cmap='bwr', alpha=0.6, vmin=-max_abs, vmax=max_abs)
+                    plt.colorbar(im, ax=ax, fraction=0.046, pad=0.04, label="Contrastive Evidence Score")
+                    ax.axis('off')
+                    
+                    st.pyplot(fig)
+                    plt.close(fig)
