@@ -153,14 +153,14 @@ Average Drop measures the relative decrease in the original predicted-class conf
 
 For an image \(x\), its explanation mask \(M\), predicted class \(c\), and classifier head \(h\), the per-image quantity is:
 
-\[
+$$
 AD(x,M,h)=
 \max\left(
 \frac{p_h(c\mid x)-p_h(c\mid x\odot M)}
 {\max(p_h(c\mid x),10^{-6})},
 0
 \right)
-\]
+$$
 
 The reported AD is the mean of this quantity across the evaluated images, multiplied by 100.
 
