@@ -31,8 +31,6 @@ Setting: ResNet-50, CUB-200-2011, post-fitted (PF) CAPE head, 14x14 explanation 
 - The mask-convention experiment (Section 4) contains an independent regression check. Under the soft mask, the vanilla-head CAPE AD is 57.3 (old evaluator: 57.7) and the CAPE-head AD is 34.1 (corrected evaluator: 33.55).
 - The paper says the CAPE explanation should not be used to explain the vanilla classifier (Discussion, "CAPE explains itself"). Scoring CAPE maps with the vanilla head went against that.
 
-This is the third error we caught in this project. The first two were mislabeling mu-CAPE's map as CAPE's, and a coherency-normalization bug in ADCC.
-
 ---
 
 ## 3. What the earlier results implied, and why we retract it
