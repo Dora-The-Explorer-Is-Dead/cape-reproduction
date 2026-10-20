@@ -271,7 +271,7 @@ The additional results scored by the other head are also retained. These make it
 
 The following figure shows the average fraction of the image retained under each binary threshold. The dotted horizontal lines indicate each method's average retained area under its soft mask.
 
-![How much image each method keeps at each threshold](https://huggingface.co/umamamianoor/cape-cub-pf/blob/main/final_third_experiment/kept_area_vs_theta.png)
+![How much image each method keeps at each threshold](results/mask_convention/kept_area_vs_theta.png)
 
 **Figure 1. Retained image area under binary threshold masks.** The x-axis is the relative threshold \(\theta\); the y-axis is the average retained image area. Dotted lines show the average area retained by the corresponding soft mask.
 
